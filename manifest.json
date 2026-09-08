@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "Warm Tab Pool",
+  "version": "1.0.0",
+  "description": "Keep a pool of preloaded web pages.",
+  "permissions": [
+    "storage",
+    "sessions",
+    "tabHide"
+  ],
+  "background": {
+    "scripts": [
+      "common.js",
+      "background.js"
+    ]
+  },
+  "action": {
+    "default_title": "Warm Tab Pool",
+    "default_popup": "popup/popup.html"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "take-pool-1": { "description": "Take a tab from warm pool slot 1" },
+    "take-pool-2": { "description": "Take a tab from warm pool slot 2" },
+    "take-pool-3": { "description": "Take a tab from warm pool slot 3" },
+    "take-pool-4": { "description": "Take a tab from warm pool slot 4" },
+    "take-pool-5": { "description": "Take a tab from warm pool slot 5" },
+    "take-pool-6": { "description": "Take a tab from warm pool slot 6" },
+    "take-pool-7": { "description": "Take a tab from warm pool slot 7" },
+    "take-pool-8": { "description": "Take a tab from warm pool slot 8" },
+    "take-pool-9": { "description": "Take a tab from warm pool slot 9" },
+    "take-pool-10": { "description": "Take a tab from warm pool slot 10" },
+    "take-pool-11": { "description": "Take a tab from warm pool slot 11" },
+    "take-pool-12": { "description": "Take a tab from warm pool slot 12" }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "warm-tab-pool-6f4a0f63@local.invalid",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  }
+}

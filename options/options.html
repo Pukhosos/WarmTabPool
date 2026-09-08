@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Warm Tab Pool settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Warm Tab Pool</h1>
+        <p>Configure up to 12 independent pools. Each pool keeps its target page preloaded in background tabs.</p>
+      </div>
+    </header>
+
+    <section class="card globals">
+      <h2>Background behavior</h2>
+      <label class="check-row">
+        <input id="hideWarmTabs" type="checkbox">
+        <span>
+          <strong>Hide pooled tabs from the tab strip</strong>
+          <small>Recommended. Firefox still keeps hidden tabs running.</small>
+        </span>
+      </label>
+      <label class="check-row">
+        <input id="muteWarmTabs" type="checkbox">
+        <span>
+          <strong>Mute pooled tabs until they are taken</strong>
+          <small>Prevents a background site from unexpectedly playing audio.</small>
+        </span>
+      </label>
+      <p class="note">Warm tabs are always marked non-discardable while they are in a pool. Once taken, normal Firefox discarding behavior is restored.</p>
+    </section>
+
+    <section class="card">
+      <div class="section-title">
+        <div>
+          <h2>Pools</h2>
+          <p class="hint">Shortcut examples: <code>Ctrl+Shift+1</code>, <code>Alt+F2</code>, <code>F13</code>. Leave blank for no shortcut.</p>
+        </div>
+        <button id="shortcutSettings" type="button">Firefox shortcut settings</button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>On</th>
+              <th>Slot</th>
+              <th>Name</th>
+              <th>URL</th>
+              <th>Size</th>
+              <th>Shortcut</th>
+            </tr>
+          </thead>
+          <tbody id="poolRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="actions">
+      <div id="message" role="status" aria-live="polite"></div>
+      <button id="refill" type="button">Refill now</button>
+      <button id="save" class="primary" type="button">Save</button>
+    </div>
+  </main>
+
+  <script src="../common.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

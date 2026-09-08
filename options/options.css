@@ -1,0 +1,205 @@
+:root {
+  color-scheme: light dark;
+  font: 15px/1.45 system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: Canvas;
+  color: CanvasText;
+}
+
+main {
+  max-width: 1220px;
+  margin: 0 auto;
+  padding: 34px 28px 60px;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 30px;
+}
+
+header p {
+  margin: 6px 0 24px;
+  max-width: 760px;
+  opacity: 0.72;
+}
+
+.card {
+  margin: 18px 0;
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, Canvas 97%, CanvasText 3%);
+}
+
+h2 {
+  margin: 0 0 14px;
+  font-size: 19px;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 1px solid color-mix(in srgb, CanvasText 24%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: ButtonFace;
+  color: ButtonText;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.primary {
+  font-weight: 650;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, CanvasText 24%, transparent);
+  border-radius: 6px;
+  background: Field;
+  color: FieldText;
+}
+
+input[type="number"] {
+  width: 72px;
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.check-row input {
+  margin-top: 4px;
+}
+
+.check-row span {
+  display: flex;
+  flex-direction: column;
+}
+
+.check-row small,
+.note,
+.hint {
+  opacity: 0.7;
+}
+
+.note {
+  margin: 14px 0 0 26px;
+  font-size: 13px;
+}
+
+.section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.section-title h2 {
+  margin-bottom: 4px;
+}
+
+.hint {
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 8px 6px;
+  text-align: left;
+  vertical-align: middle;
+  border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+th {
+  border-top: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+
+.slot {
+  width: 42px;
+  text-align: center;
+  opacity: 0.72;
+}
+
+.enabled {
+  width: 42px;
+  text-align: center;
+}
+
+.name-cell {
+  min-width: 140px;
+  width: 18%;
+}
+
+.url-cell {
+  min-width: 330px;
+}
+
+.shortcut-cell {
+  min-width: 160px;
+  width: 18%;
+}
+
+.invalid {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 0;
+  background: Canvas;
+}
+
+#message {
+  margin-right: auto;
+  min-height: 1.4em;
+}
+
+#message.error {
+  font-weight: 600;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}

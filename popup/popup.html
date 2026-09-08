@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Warm Tab Pool</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Warm Tab Pool</h1>
+      <p>Ready pages, handed out on demand.</p>
+    </div>
+    <button id="refresh" class="icon-button" type="button" title="Refresh status">↻</button>
+  </header>
+
+  <main id="pools" aria-live="polite"></main>
+
+  <footer>
+    <button id="refill" type="button">Refill now</button>
+    <button id="options" type="button">Settings</button>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
