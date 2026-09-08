@@ -38,7 +38,7 @@
       <div class="section-title">
         <div>
           <h2>Pools</h2>
-          <p class="hint">Shortcut examples: <code>Ctrl+Shift+1</code>, <code>Alt+F2</code>, <code>F13</code>. Leave blank for no shortcut.</p>
+          <p class="hint">Shortcut values must be typed as text into the field, for example <code>Ctrl+Shift+1</code>, <code>Alt+F2</code>, or <code>F13</code>. Do not focus the field and press the shortcut combination itself. Leave blank for no shortcut.</p>
         </div>
         <button id="shortcutSettings" type="button">Firefox shortcut settings</button>
       </div>
@@ -60,9 +60,30 @@
       </div>
     </section>
 
+    <div class="card" id="poolGroupsCard">
+      <div class="section-title group-section-title">
+        <div>
+          <h2>Pool groups</h2>
+          <p class="hint">A group stores one complete 12-pool set, including its shortcuts. Load a group to make that set active in Pools and in the popup. The Default group is always available and cannot be deleted.</p>
+        </div>
+        <div class="config-buttons">
+          <button id="importConfig" type="button">Import JSON</button>
+          <button id="exportConfig" type="button">Export JSON</button>
+          <input id="importFile" type="file" accept="application/json,.json" hidden>
+        </div>
+      </div>
+
+      <div id="groupList" class="group-list"></div>
+
+      <div class="new-group-row">
+        <input id="newGroupName" type="text" maxlength="80" placeholder="New group name" aria-label="New group name">
+        <button id="createGroup" type="button">New group (copy current Pools)</button>
+      </div>
+    </div>
+
     <div class="actions">
       <div id="message" role="status" aria-live="polite"></div>
-      <button id="refill" type="button">Refill now</button>
+      <button id="refill" type="button" title="Reconcile the active group now: create missing warm tabs, remove extras or stale tabs, reload discarded pool tabs, and reapply hide/mute settings.">Refill now</button>
       <button id="save" class="primary" type="button">Save</button>
     </div>
   </main>

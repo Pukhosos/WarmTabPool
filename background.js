@@ -219,8 +219,9 @@ async function normalizeExistingWarmTab(entry, config) {
 async function reconcilePools() {
   const config = await WTP.loadConfig();
   let entries = await taggedTabs();
+  const pools = WTP.activeGroup(config).pools;
   const enabledBySlot = new Map(
-    config.pools.filter(
+    pools.filter(
       (pool) => pool.enabled && pool.url
     ).map((pool) => [pool.slot, pool]),
   );
@@ -234,7 +235,7 @@ async function reconcilePools() {
   entries = entries.filter((entry) => !invalid.includes(entry));
   const preferredWindowId = await getTargetWindowId();
 
-  for (const pool of config.pools) {
+  for (const pool of pools) {
     if (!pool.enabled || !pool.url) {
       continue;
     }
@@ -285,7 +286,7 @@ async function statusSnapshot({ reconcile = false } = {}) {
   const config = await WTP.loadConfig();
   const entries = await taggedTabs();
 
-  return config.pools.map((pool) => {
+  return WTP.activeGroup(config).pools.map((pool) => {
     const candidates = entries.filter(
       (
         ({ membership }) => membership.slot === pool.slot

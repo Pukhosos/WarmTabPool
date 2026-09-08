@@ -38,7 +38,7 @@ Firefox keyboard commands must be declared in the extension manifest ahead of ti
 
 This extension therefore declares 12 generic command slots. You can enable any subset of them, rename them, assign any supported shortcut to each, and give each its own pool size.
 
-Pool *size* is independent of the number of slots and can be 1–20.
+Pool *size* is independent of the number of slots and can be 0–64. New pools default to size 1. Size 0 keeps the slot/shortcut available but preloads no warm copies, so taking from it uses the normal cold fallback.
 
 ## Install for testing (ordinary Firefox)
 
@@ -65,7 +65,7 @@ Developer Edition, Nightly, and supported ESR configurations can also be used fo
 5. Enter a name.
 6. Enter a full `http://` or `https://` URL.
 7. Choose the number of warm copies to keep.
-8. Optionally enter a Firefox extension shortcut.
+8. Optionally enter a Firefox extension shortcut by typing its textual form (for example, `Ctrl+Shift+1`) into the field; do not press the shortcut combination itself while the field is focused.
 9. Click **Save**.
 
 Example:
@@ -98,9 +98,23 @@ The toolbar popup shows each enabled pool with:
 - target pool size;
 - number still loading;
 - number being restored/reloaded;
+- the configured keyboard shortcut, when one is assigned;
 - a **Take** button.
 
-**Refill now** reconciles configured sizes immediately.
+While the popup is open, status is refreshed automatically every 500 ms, so loading/ready counts update without repeatedly pressing the refresh button.
+
+**Refill now** runs a full reconciliation of the active group. It removes stale warm tabs (for disabled pools or changed URLs), reapplies hide/mute/non-discardable state, reloads discarded warm tabs, removes surplus tabs, and creates missing tabs until each enabled pool matches its configured size. It does not reclaim tabs that have already been handed to the user.
+
+## Pool groups
+
+The options page can store multiple complete 12-pool sets. The built-in **Default** group is always present and cannot be deleted.
+
+- **Load** makes a group's 12 pools active, applies that group's shortcuts, and reconciles the hidden warm tabs to the newly selected set.
+- **New group (copy current Pools)** creates a new group from the values currently visible in the Pools table and immediately loads it.
+- Non-default groups can be deleted after another group is loaded.
+- Global background settings (hide/mute) are shared across groups; pool rows and shortcuts are group-specific.
+
+The options page can also **Export JSON** and **Import JSON**. The JSON contains the complete configuration: global settings, all pool groups, the active group, all 12 pool definitions per group, and the group's shortcut strings. Version-1 single-pool-set configurations are migrated into the Default group when loaded/imported.
 
 ## What “ready” means
 

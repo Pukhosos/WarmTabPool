@@ -100,7 +100,8 @@ input[type="number"] {
 
 .check-row small,
 .note,
-.hint {
+.hint,
+.group-summary {
   opacity: 0.7;
 }
 
@@ -180,6 +181,70 @@ th {
   outline-offset: 1px;
 }
 
+.group-section-title {
+  margin-bottom: 8px;
+}
+
+.config-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.group-list {
+  border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.group-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(180px, 2fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.group-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.group-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 999px;
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+.group-summary {
+  font-size: 13px;
+}
+
+.group-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.new-group-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) auto;
+  justify-content: start;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 .actions {
   position: sticky;
   bottom: 0;
@@ -202,4 +267,31 @@ th {
 
 code {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+@media (max-width: 760px) {
+  main {
+    padding-inline: 14px;
+  }
+
+  .section-title,
+  .group-section-title {
+    flex-direction: column;
+  }
+
+  .config-buttons {
+    justify-content: flex-start;
+  }
+
+  .group-row {
+    grid-template-columns: 1fr;
+  }
+
+  .group-actions {
+    justify-content: flex-start;
+  }
+
+  .new-group-row {
+    grid-template-columns: 1fr;
+  }
 }
