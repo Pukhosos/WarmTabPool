@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Warm Tab Pool",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Keep a pool of preloaded web pages.",
   "permissions": [
     "storage",
@@ -24,40 +24,100 @@
   },
   "commands": {
     "take-pool-1": {
-      "description": "Take a tab from warm pool slot 1"
+      "description": "Take a tab from active pool slot 1"
     },
     "take-pool-2": {
-      "description": "Take a tab from warm pool slot 2"
+      "description": "Take a tab from active pool slot 2"
     },
     "take-pool-3": {
-      "description": "Take a tab from warm pool slot 3"
+      "description": "Take a tab from active pool slot 3"
     },
     "take-pool-4": {
-      "description": "Take a tab from warm pool slot 4"
+      "description": "Take a tab from active pool slot 4"
     },
     "take-pool-5": {
-      "description": "Take a tab from warm pool slot 5"
+      "description": "Take a tab from active pool slot 5"
     },
     "take-pool-6": {
-      "description": "Take a tab from warm pool slot 6"
+      "description": "Take a tab from active pool slot 6"
     },
     "take-pool-7": {
-      "description": "Take a tab from warm pool slot 7"
+      "description": "Take a tab from active pool slot 7"
     },
     "take-pool-8": {
-      "description": "Take a tab from warm pool slot 8"
+      "description": "Take a tab from active pool slot 8"
     },
     "take-pool-9": {
-      "description": "Take a tab from warm pool slot 9"
+      "description": "Take a tab from active pool slot 9"
     },
     "take-pool-10": {
-      "description": "Take a tab from warm pool slot 10"
+      "description": "Take a tab from active pool slot 10"
     },
     "take-pool-11": {
-      "description": "Take a tab from warm pool slot 11"
+      "description": "Take a tab from active pool slot 11"
     },
     "take-pool-12": {
-      "description": "Take a tab from warm pool slot 12"
+      "description": "Take a tab from active pool slot 12"
+    },
+    "take-pool-13": {
+      "description": "Take a tab from active pool slot 13"
+    },
+    "take-pool-14": {
+      "description": "Take a tab from active pool slot 14"
+    },
+    "take-pool-15": {
+      "description": "Take a tab from active pool slot 15"
+    },
+    "take-pool-16": {
+      "description": "Take a tab from active pool slot 16"
+    },
+    "take-pool-17": {
+      "description": "Take a tab from active pool slot 17"
+    },
+    "take-pool-18": {
+      "description": "Take a tab from active pool slot 18"
+    },
+    "take-pool-19": {
+      "description": "Take a tab from active pool slot 19"
+    },
+    "take-pool-20": {
+      "description": "Take a tab from active pool slot 20"
+    },
+    "take-pool-21": {
+      "description": "Take a tab from active pool slot 21"
+    },
+    "take-pool-22": {
+      "description": "Take a tab from active pool slot 22"
+    },
+    "take-pool-23": {
+      "description": "Take a tab from active pool slot 23"
+    },
+    "take-pool-24": {
+      "description": "Take a tab from active pool slot 24"
+    },
+    "take-pool-25": {
+      "description": "Take a tab from active pool slot 25"
+    },
+    "take-pool-26": {
+      "description": "Take a tab from active pool slot 26"
+    },
+    "take-pool-27": {
+      "description": "Take a tab from active pool slot 27"
+    },
+    "take-pool-28": {
+      "description": "Take a tab from active pool slot 28"
+    },
+    "take-pool-29": {
+      "description": "Take a tab from active pool slot 29"
+    },
+    "take-pool-30": {
+      "description": "Take a tab from active pool slot 30"
+    },
+    "take-pool-31": {
+      "description": "Take a tab from active pool slot 31"
+    },
+    "take-pool-32": {
+      "description": "Take a tab from active pool slot 32"
     }
   },
   "browser_specific_settings": {

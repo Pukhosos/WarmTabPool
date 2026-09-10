@@ -11,12 +11,19 @@
     <header>
       <div>
         <h1>Warm Tab Pool</h1>
-        <p>Configure up to 12 independent pools. Each pool keeps its target page preloaded in background tabs.</p>
+        <p>Configure reusable pools of preloaded pages.</p>
       </div>
     </header>
 
     <section class="card globals">
-      <h2>Background behavior</h2>
+      <h2>Settings</h2>
+      <label class="check-row">
+        <input id="allowMultipleGroups" type="checkbox">
+        <span>
+          <strong>Allow multiple groups to be active simultaneously</strong>
+          <small>Active groups share the available shortcut slots.</small>
+        </span>
+      </label>
       <label class="check-row">
         <input id="hideWarmTabs" type="checkbox">
         <span>
@@ -31,40 +38,30 @@
           <small>Prevents a background site from unexpectedly playing audio.</small>
         </span>
       </label>
-      <p class="note">Warm tabs are always marked non-discardable while they are in a pool. Once taken, normal Firefox discarding behavior is restored.</p>
+      <p class="note">Warm tabs stay non-discardable while pooled. Normal Firefox discarding is restored after a tab is taken.</p>
     </section>
 
-    <section class="card">
+    <section class="card" id="activePoolsCard">
       <div class="section-title">
         <div>
-          <h2>Pools</h2>
-          <p class="hint">Shortcut values must be typed as text into the field, for example <code>Ctrl+Shift+1</code>, <code>Alt+F2</code>, or <code>F13</code>. Do not focus the field and press the shortcut combination itself. Leave blank for no shortcut.</p>
+          <h2>Active pools</h2>
+          <p class="hint">Type shortcuts as text, for example <code>Ctrl+Shift+1</code> or <code>F13</code>; do not press the key combination to edit the shortcut field. Leave blank for no shortcut. Total number of active pools must not exceed <span id="activePoolLimit">32</span>.</p>
         </div>
-        <button id="shortcutSettings" type="button">Firefox shortcut settings</button>
+        <div class="section-buttons">
+          <button id="shortcutSettings" type="button">Firefox shortcut settings</button>
+        </div>
       </div>
 
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>On</th>
-              <th>Slot</th>
-              <th>Name</th>
-              <th>URL</th>
-              <th>Size</th>
-              <th>Shortcut</th>
-            </tr>
-          </thead>
-          <tbody id="poolRows"></tbody>
-        </table>
-      </div>
+      <div id="editorHost"></div>
+      <div id="activeGroupsHost" class="active-groups"></div>
+      <p id="activePoolsEmpty" class="empty-state" hidden>No groups are active.</p>
     </section>
 
-    <div class="card" id="poolGroupsCard">
+    <section class="card" id="poolGroupsCard">
       <div class="section-title group-section-title">
         <div>
           <h2>Pool groups</h2>
-          <p class="hint">A group stores one complete 12-pool set, including its shortcuts. Load a group to make that set active in Pools and in the popup. The Default group is always available and cannot be deleted.</p>
+          <p class="hint">Groups store separate pool layouts and shortcuts.</p>
         </div>
         <div class="config-buttons">
           <button id="importConfig" type="button">Import JSON</button>
@@ -74,17 +71,13 @@
       </div>
 
       <div id="groupList" class="group-list"></div>
-
-      <div class="new-group-row">
-        <input id="newGroupName" type="text" maxlength="80" placeholder="New group name" aria-label="New group name">
-        <button id="createGroup" type="button">New group (copy current Pools)</button>
-      </div>
-    </div>
+      <button id="createGroup" class="plus-button group-plus" type="button" aria-label="New group" title="New group">+</button>
+    </section>
 
     <div class="actions">
       <div id="message" role="status" aria-live="polite"></div>
-      <button id="refill" type="button" title="Reconcile the active group now: create missing warm tabs, remove extras or stale tabs, reload discarded pool tabs, and reapply hide/mute settings.">Refill now</button>
-      <button id="save" class="primary" type="button">Save</button>
+      <button id="refresh" class="icon-button" type="button" aria-label="Reconcile warm tabs" title="Reconcile the saved active groups now: remove stale tabs, reload discarded tabs, reapply settings, and create/remove tabs to match configured sizes.">↻</button>
+      <button id="save" class="primary" type="button" disabled>Save</button>
     </div>
   </main>
 

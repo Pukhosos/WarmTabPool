@@ -12,13 +12,29 @@
       <h1>Warm Tab Pool</h1>
       <p>Ready pages, handed out on demand.</p>
     </div>
-    <button id="refresh" class="icon-button" type="button" title="Refresh status">↻</button>
+    <button id="refresh" class="icon-button" type="button" aria-label="Reconcile warm tabs" title="Reconcile warm tabs and refresh status">↻</button>
   </header>
+
+  <div class="toolbar">
+    <label class="power-control" title="Turn Warm Tab Pool on or off">
+      <input id="enabled" type="checkbox">
+      <span class="switch" aria-hidden="true"></span>
+      <span id="enabledLabel">On</span>
+    </label>
+  </div>
+
+  <section class="groups-panel">
+    <div class="panel-heading">
+      <strong>Groups</strong>
+      <span id="multiMode" class="panel-note"></span>
+    </div>
+    <div id="groups" class="group-list"></div>
+    <div id="groupMessage" class="message" role="status" aria-live="polite"></div>
+  </section>
 
   <main id="pools" aria-live="polite"></main>
 
   <footer>
-    <button id="refill" type="button" title="Reconcile the active pools now: create missing warm tabs, remove extras or stale tabs, reload discarded pool tabs, and reapply hide/mute settings.">Refill now</button>
     <button id="options" type="button">Settings</button>
   </footer>
 

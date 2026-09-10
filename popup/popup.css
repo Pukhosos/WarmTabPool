@@ -1,121 +1,39 @@
-:root {
-  color-scheme: light dark;
-  font: menu;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  width: 360px;
-  margin: 0;
-  padding: 14px;
-  background: Canvas;
-  color: CanvasText;
-}
-
-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-h1 {
-  margin: 0;
-  font-size: 17px;
-}
-
-header p {
-  margin: 3px 0 0;
-  opacity: 0.7;
-  font-size: 12px;
-}
-
-button {
-  font: inherit;
-  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
-  border-radius: 7px;
-  padding: 7px 10px;
-  background: ButtonFace;
-  color: ButtonText;
-  cursor: pointer;
-}
-
-button:hover {
-  filter: brightness(0.97);
-}
-
-.icon-button {
-  min-width: 34px;
-  padding: 6px;
-  font-size: 18px;
-}
-
-.pool {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 9px 12px;
-  align-items: center;
-  padding: 10px 0;
-  border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
-}
-
-.pool:first-child {
-  border-top: 0;
-}
-
-.pool-name {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pool-meta {
-  margin-top: 2px;
-  font-size: 12px;
-  opacity: 0.72;
-}
-
-.take-controls {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.shortcut {
-  max-width: 105px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
-  border-radius: 5px;
-  background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
-  font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
-  opacity: 0.82;
-}
-
-.take {
-  min-width: 66px;
-}
-
-.empty {
-  padding: 18px 4px;
-  text-align: center;
-  opacity: 0.72;
-  line-height: 1.45;
-}
-
-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
-}
+:root { color-scheme: light dark; font: menu; }
+* { box-sizing: border-box; }
+body { width: 430px; margin: 0; padding: 14px; background: Canvas; color: CanvasText; }
+header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+h1 { margin: 0; font-size: 17px; }
+header p { margin: 3px 0 0; opacity: .7; font-size: 12px; }
+button { font: inherit; border: 1px solid color-mix(in srgb, CanvasText 22%, transparent); border-radius: 7px; padding: 7px 10px; background: ButtonFace; color: ButtonText; cursor: pointer; }
+button:hover:not(:disabled) { filter: brightness(.97); }
+button:disabled { opacity: .55; }
+.icon-button { min-width: 34px; padding: 6px; font-size: 18px; }
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0 10px; border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
+.power-control, .group-switch { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; user-select: none; }
+.power-control input, .group-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.switch { position: relative; width: 34px; height: 19px; border-radius: 999px; background: color-mix(in srgb, CanvasText 22%, Canvas); transition: background .12s ease; flex: 0 0 auto; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: Canvas; box-shadow: 0 0 0 1px color-mix(in srgb, CanvasText 20%, transparent); transition: transform .12s ease; }
+.power-control input:checked + .switch, .group-switch input:checked + .switch { background: color-mix(in srgb, AccentColor 75%, CanvasText 25%); }
+.power-control input:checked + .switch::after, .group-switch input:checked + .switch::after { transform: translateX(15px); }
+.power-control input:focus-visible + .switch, .group-switch input:focus-visible + .switch { outline: 2px solid currentColor; outline-offset: 2px; }
+.groups-panel { padding: 10px 0; border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
+.panel-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 5px; font-size: 12px; }
+.panel-note { opacity: .58; font-size: 11px; text-align: right; }
+.group-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 0; }
+.group-info { min-width: 0; display: flex; align-items: baseline; gap: 7px; }
+.group-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-meta { flex: 0 0 auto; font-size: 11px; opacity: .55; }
+.message { min-height: 0; margin-top: 3px; font-size: 11px; line-height: 1.35; }
+.message.error { font-weight: 600; }
+.active-group { padding: 9px 0 2px; border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
+.active-group:last-child { border-bottom: 0; }
+.active-group-heading { margin: 0 0 2px; font-size: 12px; font-weight: 700; opacity: .78; }
+.pool { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px 12px; align-items: center; padding: 9px 0; border-top: 1px solid color-mix(in srgb, CanvasText 11%, transparent); }
+.active-group-heading + .pool { border-top: 0; }
+.pool-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pool-meta { margin-top: 2px; font-size: 12px; opacity: .72; }
+.take-controls { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.shortcut { max-width: 115px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 6px; border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); border-radius: 5px; background: color-mix(in srgb, Canvas 92%, CanvasText 8%); font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; opacity: .82; }
+.take { min-width: 66px; }
+.empty, .off { padding: 16px 4px; text-align: center; opacity: .72; line-height: 1.45; }
+footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
