@@ -60,9 +60,7 @@ function poolSignatureFor(state) {
 }
 
 function renderGroups(state) {
-  multiModeElement.textContent = state.allowMultipleGroups
-    ? `up to ${state.maxActivePools} active pools`
-    : "one active group at a time";
+  multiModeElement.textContent = `${state.activePoolCount} of ${state.maxActivePools} active pools used`;
 
   const signature = groupSignatureFor(state);
   if (signature === groupRenderSignature) {
@@ -290,7 +288,11 @@ async function loadShortcuts() {
   ));
 }
 
-async function refresh({ reconcile = false, indicate = false } = {}) {
+async function refresh({
+  reconcile = false,
+  indicate = false,
+  reloadShortcuts = false,
+} = {}) {
   if (refreshInFlight || interactionInFlight) {
     return;
   }
@@ -300,7 +302,7 @@ async function refresh({ reconcile = false, indicate = false } = {}) {
   }
 
   try {
-    if (reconcile) {
+    if (reconcile || reloadShortcuts) {
       await loadShortcuts().catch(() => {});
     }
     const state = await browser.runtime.sendMessage({
@@ -350,6 +352,14 @@ enabledInput.addEventListener("change", async () => {
 optionsButton.addEventListener("click", () => {
   void browser.runtime.openOptionsPage();
   window.close();
+});
+
+browser.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes[WTP.CONFIG_KEY]) {
+    poolRenderSignature = null;
+    groupRenderSignature = null;
+    void refresh({ reloadShortcuts: true });
+  }
 });
 
 async function start() {

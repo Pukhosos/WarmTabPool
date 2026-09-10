@@ -81,6 +81,26 @@
     </div>
   </main>
 
+  <dialog id="appDialog" class="app-dialog" aria-labelledby="appDialogTitle">
+    <form id="appDialogForm" method="dialog">
+      <h3 id="appDialogTitle"></h3>
+      <p id="appDialogMessage" class="dialog-message" hidden></p>
+      <label id="appDialogInputWrap" class="dialog-field" hidden>
+        <span id="appDialogInputLabel"></span>
+        <input id="appDialogInput" type="text" autocomplete="off">
+      </label>
+      <label id="appDialogCheckboxWrap" class="dialog-check" hidden>
+        <input id="appDialogCheckbox" type="checkbox">
+        <span id="appDialogCheckboxLabel"></span>
+      </label>
+      <p id="appDialogInfo" class="dialog-info" hidden></p>
+      <div class="dialog-actions">
+        <button id="appDialogCancel" type="button">Cancel</button>
+        <button id="appDialogConfirm" class="primary" type="submit" value="confirm">OK</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="../common.js"></script>
   <script src="options.js"></script>
 </body>

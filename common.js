@@ -250,8 +250,10 @@
   }
 
   function activeGroups(config) {
-    const activeIds = new Set(config.activeGroupIds);
-    return config.poolGroups.filter((group) => activeIds.has(group.id));
+    const byId = new Map(config.poolGroups.map((group) => [group.id, group]));
+    return config.activeGroupIds
+      .map((groupId) => byId.get(groupId))
+      .filter(Boolean);
   }
 
   function activePoolAssignments(config) {
@@ -278,6 +280,7 @@
     if (assignments.length > MAX_POOLS) {
       return {
         code: "pool-limit",
+        poolCount: assignments.length,
         message: `Cannot activate these groups: they contain ${assignments.length} pools in total, but only ${MAX_POOLS} shortcut slots are available.`,
       };
     }
@@ -293,6 +296,9 @@
       if (previous) {
         return {
           code: "shortcut-collision",
+          shortcut,
+          first: previous,
+          second: assignment,
           message: `Cannot activate these groups: shortcut “${shortcut}” is assigned to both “${previous.group.name} / ${previous.pool.name}” and “${assignment.group.name} / ${assignment.pool.name}”.`,
         };
       }
@@ -300,6 +306,170 @@
     }
 
     return null;
+  }
+
+  function uniqueMergedPoolId(usedIds, sourceGroupId, preferredId) {
+    const preferred = String(preferredId ?? "").trim() || "pool";
+    if (!usedIds.has(preferred)) {
+      usedIds.add(preferred);
+      return preferred;
+    }
+
+    const sourcePrefix = String(sourceGroupId ?? "source").trim() || "source";
+    const base = `${sourcePrefix}-${preferred}`;
+    let id = base;
+    let suffix = 2;
+    while (usedIds.has(id)) {
+      id = `${base}-${suffix}`;
+      suffix += 1;
+    }
+    usedIds.add(id);
+    return id;
+  }
+
+  function buildMergedConfig(config, sourceGroupId, targetGroupId, { destructive = false } = {}) {
+    const draft = structuredClone(normalizeConfig(config));
+    const source = groupById(draft, sourceGroupId);
+    const target = groupById(draft, targetGroupId);
+    if (!source || !target) {
+      throw new Error("One of the pool groups no longer exists.");
+    }
+    if (source.id === target.id) {
+      throw new Error("A pool group cannot be merged into itself.");
+    }
+
+    const usedPoolIds = new Set(target.pools.map((pool) => pool.id));
+    const targetPoolCount = target.pools.length;
+    const mergedShortcuts = defaultShortcuts();
+
+    for (const pool of target.pools) {
+      mergedShortcuts[pool.slot - 1] = target.shortcuts[pool.slot - 1] ?? "";
+    }
+
+    const appendedPools = source.pools.map((pool, index) => {
+      const slot = targetPoolCount + index + 1;
+      mergedShortcuts[slot - 1] = source.shortcuts[pool.slot - 1] ?? "";
+      return {
+        ...pool,
+        id: uniqueMergedPoolId(usedPoolIds, source.id, pool.id),
+        slot,
+      };
+    });
+
+    target.pools = [
+      ...target.pools.map((pool, index) => ({ ...pool, slot: index + 1 })),
+      ...appendedPools,
+    ];
+    target.shortcuts = mergedShortcuts;
+
+    if (destructive) {
+      draft.poolGroups = draft.poolGroups.filter((group) => group.id !== source.id);
+
+      const sourceWasActive = draft.activeGroupIds.includes(source.id);
+      const targetWasActive = draft.activeGroupIds.includes(target.id);
+      const nextActiveIds = [];
+      for (const groupId of draft.activeGroupIds) {
+        if (groupId === source.id) {
+          if (sourceWasActive && !targetWasActive && !nextActiveIds.includes(target.id)) {
+            nextActiveIds.push(target.id);
+          }
+          continue;
+        }
+        if (!nextActiveIds.includes(groupId)) {
+          nextActiveIds.push(groupId);
+        }
+      }
+      draft.activeGroupIds = nextActiveIds;
+    }
+
+    return normalizeConfig(draft);
+  }
+
+  function mergedGroupShortcutIssue(target, source) {
+    const seen = new Map();
+    for (const group of [target, source]) {
+      for (const pool of group.pools) {
+        const shortcut = String(group.shortcuts[pool.slot - 1] ?? "").trim();
+        if (!shortcut) {
+          continue;
+        }
+        const key = shortcut.toLocaleLowerCase("en-US");
+        const previous = seen.get(key);
+        if (previous) {
+          return {
+            code: "merge-shortcut-collision",
+            shortcut,
+            message: `Cannot merge: shortcut “${shortcut}” would be assigned to both “${previous.pool.name}” and “${pool.name}” in the merged group.`,
+          };
+        }
+        seen.set(key, { group, pool });
+      }
+    }
+    return null;
+  }
+
+  function groupMergeIssue(config, sourceGroupId, targetGroupId, { destructive = false } = {}) {
+    const normalized = normalizeConfig(config);
+    const source = groupById(normalized, sourceGroupId);
+    const target = groupById(normalized, targetGroupId);
+    if (!source || !target) {
+      return {
+        code: "merge-missing-group",
+        message: "Cannot merge because one of the pool groups no longer exists.",
+      };
+    }
+    if (source.id === target.id) {
+      return {
+        code: "merge-self",
+        message: "A pool group cannot be merged into itself.",
+      };
+    }
+
+    const mergedPoolCount = target.pools.length + source.pools.length;
+    if (mergedPoolCount > MAX_POOLS) {
+      return {
+        code: "merge-pool-limit",
+        poolCount: mergedPoolCount,
+        message: `Cannot merge: the edited group would contain ${mergedPoolCount} pools, exceeding the ${MAX_POOLS}-pool limit.`,
+      };
+    }
+
+    const localShortcutIssue = mergedGroupShortcutIssue(target, source);
+    if (localShortcutIssue) {
+      return localShortcutIssue;
+    }
+
+    const merged = buildMergedConfig(normalized, source.id, target.id, { destructive });
+    const activeIssue = activeConfigurationIssue(merged);
+    if (!activeIssue) {
+      return null;
+    }
+    if (activeIssue.code === "pool-limit") {
+      return {
+        code: "merge-active-pool-limit",
+        poolCount: activeIssue.poolCount,
+        message: `Cannot merge: the resulting active groups would use ${activeIssue.poolCount} pools, but only ${MAX_POOLS} shortcut slots are available.`,
+      };
+    }
+    if (activeIssue.code === "shortcut-collision") {
+      return {
+        code: "merge-active-shortcut-collision",
+        shortcut: activeIssue.shortcut,
+        message: `Cannot merge: shortcut “${activeIssue.shortcut}” would conflict between “${activeIssue.first.group.name} / ${activeIssue.first.pool.name}” and “${activeIssue.second.group.name} / ${activeIssue.second.pool.name}”.`,
+      };
+    }
+    return {
+      code: "merge-active-configuration",
+      message: `Cannot merge: ${activeIssue.message}`,
+    };
+  }
+
+  function mergeGroups(config, sourceGroupId, targetGroupId, { destructive = false } = {}) {
+    const issue = groupMergeIssue(config, sourceGroupId, targetGroupId, { destructive });
+    if (issue) {
+      throw new Error(issue.message);
+    }
+    return buildMergedConfig(config, sourceGroupId, targetGroupId, { destructive });
   }
 
   function assertActiveConfiguration(config) {
@@ -367,6 +537,8 @@
     activeGroups,
     activePoolAssignments,
     activeConfigurationIssue,
+    groupMergeIssue,
+    mergeGroups,
     assertActiveConfiguration,
     loadConfig,
     saveConfig,

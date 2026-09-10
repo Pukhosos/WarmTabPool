@@ -16,7 +16,7 @@ Hovering or keyboard-focusing a **Take** button also calls Firefox's `tabs.warmu
 
 The manifest declares 32 command slots: `take-pool-1` through `take-pool-32`.
 
-Active groups share those slots in group-list order, then pool order. For example, if the first active group has three pools, its pools use command slots 1–3; the next active group's first pool uses command slot 4.
+Active groups share those slots in explicit active-group order, then pool order. For example, if the first active group has three pools, its pools use command slots 1–3; the next active group's first pool uses command slot 4. The active-group order is stored in `activeGroupIds` and can be changed by dragging the active group panels in Settings.
 
 The total number of pools across all active groups cannot exceed 32. Disabled pool rows still occupy a slot because their row position is part of the group's shortcut layout. Inactive groups do not consume command slots.
 
@@ -27,7 +27,7 @@ A group activation is rejected if either:
 - the active groups would contain more than 32 pools in total; or
 - two active pools would claim the same non-empty shortcut.
 
-The collision check is performed before the active set or Firefox command mapping is committed, so an invalid merge does not partially load.
+The collision check is performed before the active set or Firefox command mapping is committed, so an invalid transition does not partially load.
 
 ## Pools
 
@@ -61,25 +61,35 @@ The Pool groups section supports any number of groups, including zero. A fresh i
 
 Each group row provides:
 
-- **Rename**, which prompts for a new name without entering edit mode;
-- **Clone group**, which prompts for the clone's name, creates an inactive copy, and opens the clone for editing;
+- **Rename**, which asks for a new name without entering edit mode;
+- **Clone**, which asks for the clone's name, creates an inactive copy, and opens the clone for editing;
 - **Edit**, which opens the group in the Active pools editor without activating it;
 - **Load** or **Unload**, depending on its active state; and
 - **Delete**.
 
-Creating a group with the bottom **+** button prompts for the group name, with a generated default value. The old global group-name field is gone.
+While a group is being edited, every other group also gets an **↑** merge action. Merging appends the source group's pools to the edited group. The source group is **kept by default**. The merge dialog contains an unchecked **Remove “source” after merging (destructive)** checkbox; selecting it turns the operation into a destructive merge that removes the source group after its pools are appended. The resulting edited group keeps its name. Pool IDs are de-duplicated when necessary.
 
-Group rows are draggable. Because active command slots follow group-list order, saving a reorder can change the command-slot number of active pools while preserving each pool's own stored shortcut.
+For a destructive merge, if the source group was active while the edited group was inactive, the edited target takes the source group's active position so an active group is not silently lost. A non-destructive merge leaves the source group's stored and active state unchanged.
+
+Merge compatibility is preflighted continuously against the current editor draft for both modes. A mode is incompatible if the resulting edited group would exceed 32 pools, if a non-empty shortcut would be duplicated inside the merged group, or if the resulting active-group configuration would exceed the 32 command slots or conflict with another active shortcut. The **↑** action is disabled only when neither non-destructive nor destructive merging is possible. If only one mode is possible, the dialog remains available and disables **Merge** until the compatible checkbox state is selected. Hover text and the dialog's information line explain the concrete reason, including the conflicting shortcut.
+
+Creating a group with the bottom **+** button asks for the group name, with a generated default value. The old global group-name field is gone.
+
+Group rows are draggable to organize the stored-group list. This ordering is independent of the live active-group order; active group panels have their own drag handles in **Active pools**, and changing that order immediately remaps command slots while preserving each pool's own stored shortcut and warm-tab identity.
 
 Deleting an active group unloads it; no neighboring group is loaded automatically. Zero active groups and zero stored groups are both valid states.
+
+Group creation, rename, clone, delete, merge, and import confirmation use an in-page HTML dialog rather than JavaScript `prompt()` / `confirm()`. This means Firefox's **Prevent this page from creating additional dialogs** control cannot disable those extension operations and leave the settings UI softlocked. Confirmation-only dialogs do not render a text field; merge uses the same dialog component with its destructive-mode checkbox and compatibility information line.
 
 Group rows and the popup display two compact counts beside each group name: total pool rows and total configured warm tabs. The warm-tab count is the sum of sizes of enabled pools.
 
 ## Saving and live-state operations
 
-The page-level **Save** button is disabled when there are no unsaved changes. It becomes enabled after pool edits, settings changes, group creation/cloning/renaming/reordering, or detected Firefox shortcut changes.
+The page-level **Save** button is disabled when there are no unsaved pool/global-setting changes. Pool edits, settings changes, or detected Firefox shortcut changes enable it. Group-level structural actions (create, clone, rename, delete, merge, and stored-group reorder) are committed immediately so the popup and any other open extension view see the same group list without requiring an extra Save.
 
-Loading, unloading, or deleting a group affects the live warm-tab/shortcut state, so those operations validate and commit the current valid draft as part of the operation. This avoids a live active-set definition that disagrees with the pool definitions used by the background process.
+Loading/unloading groups and changing active-group order are also live transitions. Every committed transition is serialized by the background process, validates the full active configuration, updates Firefox command slots, persists the configuration, and reconciles warm tabs. If persistence fails after a shortcut remap, the previous shortcut mapping is restored.
+
+While an active group is being edited, shortcut/pool-limit compatibility is checked against all other active groups as the draft changes. An incompatible draft is reported immediately, disables Save, and cannot be closed with **Done** or committed until the conflict is resolved.
 
 Leaving or reloading the settings page with unsaved changes invokes Firefox's native `beforeunload` confirmation. Firefox controls the exact wording, but the semantics are preserve the draft by staying or discard it by leaving.
 
@@ -99,9 +109,11 @@ With multi-group mode enabled, those sliders independently load and unload group
 
 The popup's pool list is grouped by active group. Enabled pools show ready/loading state, the effective Firefox shortcut for their assigned command slot, and **Take**.
 
-The popup's **↻** button performs the same full reconciliation as the settings-page arrow. Automatic status refreshes remain deliberately cheap and do not run a full reconciliation every 500 ms.
+The popup shows `N of 32 active pools used`, where `N` counts every pool row in the active groups (disabled rows still consume command slots). Its **↻** button performs the same full reconciliation as the settings-page arrow. Automatic status refreshes remain deliberately cheap and do not run a full reconciliation every 500 ms. Configuration storage changes also trigger an immediate refresh.
 
 ## Configuration schema and migration
+
+Version 1.3.0 uses configuration schema version 4.
 
 Important schema changes include:
 
@@ -155,7 +167,7 @@ There is no build step and no dependency bundle.
 
 - `manifest.json` — WebExtension manifest and 32 statically declared command slots.
 - `common.js` — configuration schema, migration, active-group allocation, and validation.
-- `background.js` — pool lifecycle, multi-group handoff/reconciliation, command assignment, and popup state.
+- `background.js` — pool lifecycle plus the serialized configuration transition state machine (validation, command assignment, persistence, reconciliation), and popup state.
 - `popup/` — toolbar popup/status/group toggles.
 - `options/` — settings UI, active-group editor, drag/drop, import/export.
 - `icons/` — extension icon.

@@ -124,20 +124,42 @@ tr.dragging, .group-row.dragging { opacity: .45; }
 .row-actions { display: flex; gap: 6px; white-space: nowrap; }
 .row-actions button { padding: 6px 9px; }
 .invalid { outline: 2px solid currentColor; outline-offset: 1px; }
-.editor-footer { display: flex; align-items: center; gap: 10px; padding: 8px 6px 0; }
+.editor-footer {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px 0;
+}
 .plus-button {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
-  font-size: 22px;
+  border-color: transparent;
+  background: transparent;
+  color: inherit;
+  font-size: 24px;
+  font-weight: 300;
   line-height: 1;
+  transition: background .12s ease, border-color .12s ease;
 }
-.editor-limit-note { margin: 0; font-size: 12px; opacity: .65; }
+.plus-button:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+}
+.plus-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, AccentColor 70%, CanvasText 30%);
+  outline-offset: 2px;
+}
+.editor-footer .plus-button { grid-column: 2; }
+.editor-limit-note { grid-column: 3; margin: 0; font-size: 12px; opacity: .65; }
 .active-groups { display: grid; gap: 10px; }
 .active-groups .group-panel:first-child { margin-top: 14px; }
+.active-group-panel.dragging { opacity: .45; }
+.active-group-drag-handle { flex: 0 0 auto; }
 .readonly-table td { font-size: 13px; }
 .readonly-url { max-width: 520px; overflow-wrap: anywhere; word-break: break-word; }
 .readonly-shortcut { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
@@ -165,7 +187,7 @@ tr.dragging, .group-row.dragging { opacity: .45; }
 .group-summary { font-size: 13px; }
 .group-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .group-actions button { padding: 6px 9px; }
-.group-plus { margin-top: 12px; }
+.group-plus { display: flex; margin: 12px auto 0; }
 .actions {
   position: sticky;
   bottom: 0;
@@ -190,4 +212,80 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   .group-actions { justify-content: flex-start; flex-wrap: wrap; }
   .group-panel-header { align-items: flex-start; }
   .group-panel-actions { flex-wrap: wrap; justify-content: flex-end; }
+}
+
+.merge-action-wrap {
+  display: inline-flex;
+}
+.merge-button {
+  width: 34px;
+  min-width: 34px;
+  padding-inline: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.app-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-width: 440px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, CanvasText 24%, transparent);
+  border-radius: 12px;
+  background: Canvas;
+  color: CanvasText;
+  box-shadow: 0 18px 55px rgb(0 0 0 / .35);
+}
+.app-dialog::backdrop {
+  background: rgb(0 0 0 / .48);
+}
+.app-dialog form {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 20px;
+}
+.app-dialog h3 {
+  margin: 0;
+  font-size: 17px;
+}
+.dialog-message {
+  margin: 0;
+  opacity: .82;
+}
+.dialog-field {
+  display: grid;
+  gap: 7px;
+}
+.dialog-field[hidden],
+.dialog-check[hidden],
+.dialog-info[hidden] {
+  display: none;
+}
+.dialog-field > span {
+  font-size: 13px;
+  opacity: .8;
+}
+.dialog-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.dialog-check input {
+  margin: 0;
+}
+.dialog-info {
+  margin: 0;
+  font-size: 13px;
+  opacity: .82;
+}
+.dialog-info.error {
+  color: #ff8f8f;
+  opacity: 1;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
 }

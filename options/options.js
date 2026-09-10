@@ -16,6 +16,19 @@ const createGroupButton = document.querySelector("#createGroup");
 const importConfigButton = document.querySelector("#importConfig");
 const exportConfigButton = document.querySelector("#exportConfig");
 const importFileInput = document.querySelector("#importFile");
+const appDialog = document.querySelector("#appDialog");
+const appDialogForm = document.querySelector("#appDialogForm");
+const appDialogTitle = document.querySelector("#appDialogTitle");
+const appDialogMessage = document.querySelector("#appDialogMessage");
+const appDialogInputWrap = document.querySelector("#appDialogInputWrap");
+const appDialogInputLabel = document.querySelector("#appDialogInputLabel");
+const appDialogInput = document.querySelector("#appDialogInput");
+const appDialogCheckboxWrap = document.querySelector("#appDialogCheckboxWrap");
+const appDialogCheckbox = document.querySelector("#appDialogCheckbox");
+const appDialogCheckboxLabel = document.querySelector("#appDialogCheckboxLabel");
+const appDialogInfo = document.querySelector("#appDialogInfo");
+const appDialogCancel = document.querySelector("#appDialogCancel");
+const appDialogConfirm = document.querySelector("#appDialogConfirm");
 
 let currentConfig = null;
 let editingGroupId = null;
@@ -27,17 +40,108 @@ let draggedPoolRow = null;
 let draggedPoolOrder = "";
 let draggedGroupRow = null;
 let draggedGroupOrder = "";
+let draggedActiveGroupPanel = null;
+let draggedActiveGroupOrder = "";
+let draftCompatibilityIssue = null;
+let compatibilityMessage = "";
 
 activePoolLimitElement.textContent = String(WTP.MAX_POOLS);
+
+function showAppDialog({
+  title,
+  message = "",
+  inputLabel = "",
+  inputValue = null,
+  checkboxLabel = "",
+  checkboxValue = null,
+  info = "",
+  infoError = false,
+  confirmLabel = "OK",
+  confirmDisabled = false,
+  onCheckboxChange = null,
+}) {
+  if (appDialog.open) {
+    appDialog.close("cancel");
+  }
+
+  appDialogTitle.textContent = title;
+  appDialogMessage.textContent = message;
+  appDialogMessage.hidden = !message;
+  appDialogInputWrap.hidden = inputValue === null;
+  appDialogInputLabel.textContent = inputLabel;
+  appDialogInput.value = inputValue ?? "";
+  appDialogCheckboxWrap.hidden = checkboxValue === null;
+  appDialogCheckboxLabel.textContent = checkboxLabel;
+  appDialogCheckbox.checked = checkboxValue ?? false;
+  appDialogInfo.textContent = info;
+  appDialogInfo.hidden = !info;
+  appDialogInfo.classList.toggle("error", infoError);
+  appDialogConfirm.textContent = confirmLabel;
+  appDialogConfirm.disabled = confirmDisabled;
+  appDialog.returnValue = "cancel";
+
+  let removeCheckboxListener = null;
+  if (checkboxValue !== null && onCheckboxChange) {
+    const listener = () => onCheckboxChange(appDialogCheckbox.checked);
+    appDialogCheckbox.addEventListener("change", listener);
+    removeCheckboxListener = () => appDialogCheckbox.removeEventListener("change", listener);
+  }
+
+  return new Promise((resolve) => {
+    const onClose = () => {
+      removeCheckboxListener?.();
+      const accepted = appDialog.returnValue === "confirm";
+      resolve({
+        accepted,
+        value: accepted && inputValue !== null ? appDialogInput.value : null,
+        checked: checkboxValue !== null ? appDialogCheckbox.checked : null,
+      });
+    };
+    appDialog.addEventListener("close", onClose, { once: true });
+    appDialog.showModal();
+    queueMicrotask(() => {
+      if (inputValue !== null) {
+        appDialogInput.focus();
+        appDialogInput.select();
+      } else {
+        appDialogConfirm.focus();
+      }
+    });
+  });
+}
+
+async function requestText({ title, label, value, confirmLabel = "OK" }) {
+  const result = await showAppDialog({
+    title,
+    inputLabel: label,
+    inputValue: value,
+    confirmLabel,
+  });
+  return result.accepted ? result.value : null;
+}
+
+async function requestConfirmation({ title, message, confirmLabel }) {
+  const result = await showAppDialog({ title, message, confirmLabel });
+  return result.accepted;
+}
+
+appDialogCancel.addEventListener("click", () => appDialog.close("cancel"));
+appDialogForm.addEventListener("submit", () => {
+  appDialog.returnValue = "confirm";
+});
 
 function setMessage(text, { error = false } = {}) {
   messageElement.textContent = text;
   messageElement.classList.toggle("error", error);
 }
 
+function updateSaveButton() {
+  saveButton.disabled = !dirty || Boolean(draftCompatibilityIssue);
+}
+
 function setDirty(value) {
   dirty = value;
-  saveButton.disabled = !dirty;
+  updateSaveButton();
 }
 
 function markDirty() {
@@ -283,9 +387,9 @@ function syncGlobalSettingsIntoDraft() {
   currentConfig.muteWarmTabs = muteWarmTabsInput.checked;
 
   if (!currentConfig.allowMultipleGroups && currentConfig.activeGroupIds.length > 1) {
-    const active = new Set(currentConfig.activeGroupIds);
-    const first = currentConfig.poolGroups.find((group) => active.has(group.id));
-    currentConfig.activeGroupIds = first ? [first.id] : [];
+    currentConfig.activeGroupIds = currentConfig.activeGroupIds.length > 0
+      ? [currentConfig.activeGroupIds[0]]
+      : [];
   }
 }
 
@@ -301,6 +405,114 @@ function syncEditorIntoDraft() {
   }
   currentConfig = WTP.normalizeConfig(currentConfig);
   return currentConfig;
+}
+
+function previewConfigWithEditor() {
+  if (!currentConfig) {
+    return null;
+  }
+
+  const draft = structuredClone(currentConfig);
+  if (editingGroupId && rowsElement) {
+    const group = WTP.groupById(draft, editingGroupId);
+    if (group) {
+      const rows = Array.from(rowsElement.querySelectorAll("tr"));
+      const poolsById = new Map(group.pools.map((pool) => [pool.id, pool]));
+      const shortcuts = WTP.defaultShortcuts();
+      group.pools = rows.map((row, index) => {
+        const previous = poolsById.get(row.dataset.poolId)
+          ?? WTP.defaultPool(index + 1, row.dataset.poolId);
+        shortcuts[index] = row.querySelector(".pool-shortcut").value.trim();
+        return {
+          ...previous,
+          slot: index + 1,
+          name: row.querySelector(".pool-name").value.trim() || `Pool ${index + 1}`,
+        };
+      });
+      group.shortcuts = WTP.normalizeShortcuts(shortcuts);
+    }
+  }
+  return WTP.normalizeConfig(draft);
+}
+
+function previewActiveConfigurationIssue() {
+  const draft = previewConfigWithEditor();
+  return draft ? WTP.activeConfigurationIssue(draft) : null;
+}
+
+function updateMergeButtonStates() {
+  if (!currentConfig || !editingGroupId) {
+    return;
+  }
+  const draft = previewConfigWithEditor();
+  const target = draft ? WTP.groupById(draft, editingGroupId) : null;
+  if (!draft || !target) {
+    return;
+  }
+
+  for (const wrap of groupListElement.querySelectorAll(".merge-action-wrap")) {
+    const sourceGroupId = wrap.dataset.sourceGroupId;
+    const source = WTP.groupById(draft, sourceGroupId);
+    const button = wrap.querySelector(".merge-button");
+    if (!source || !button) {
+      continue;
+    }
+    const nonDestructiveIssue = WTP.groupMergeIssue(
+      draft, source.id, target.id, { destructive: false },
+    );
+    const destructiveIssue = WTP.groupMergeIssue(
+      draft, source.id, target.id, { destructive: true },
+    );
+    const disabled = Boolean(nonDestructiveIssue && destructiveIssue);
+    let title = `Merge “${source.name}” into the edited group “${target.name}”: append its pools and keep “${source.name}” by default.`;
+    if (disabled) {
+      title = nonDestructiveIssue.message === destructiveIssue.message
+        ? nonDestructiveIssue.message
+        : `${nonDestructiveIssue.message} Destructive merge is also unavailable: ${destructiveIssue.message}`;
+    } else if (nonDestructiveIssue) {
+      title = `${nonDestructiveIssue.message} A destructive merge is available by selecting “Remove source group after merging” in the merge dialog.`;
+    }
+    button.disabled = disabled;
+    button.title = title;
+    wrap.title = title;
+    wrap.setAttribute("aria-label", title);
+  }
+}
+
+function updateCompatibilityValidation({ announce = true } = {}) {
+  const issue = previewActiveConfigurationIssue();
+  draftCompatibilityIssue = issue;
+  updateSaveButton();
+
+  if (issue && announce) {
+    compatibilityMessage = issue.message;
+    setMessage(issue.message, { error: true });
+  } else if (!issue && compatibilityMessage) {
+    if (messageElement.textContent === compatibilityMessage) {
+      setMessage("");
+    }
+    compatibilityMessage = "";
+  }
+  return issue;
+}
+
+function assertDraftCompatibility(config = currentConfig) {
+  const issue = WTP.activeConfigurationIssue(config);
+  if (issue) {
+    draftCompatibilityIssue = issue;
+    compatibilityMessage = issue.message;
+    updateSaveButton();
+    throw new Error(issue.message);
+  }
+  draftCompatibilityIssue = null;
+  compatibilityMessage = "";
+  updateSaveButton();
+}
+
+function syncValidDraft() {
+  const draft = syncEditorIntoDraft();
+  assertDraftCompatibility(draft);
+  return draft;
 }
 
 function editorCanAddPool(group) {
@@ -387,6 +599,8 @@ function renderEditableRows(group, body) {
       shortcut.value = "";
       autoGrow(url);
       markDirty();
+      updateCompatibilityValidation();
+      updateMergeButtonStates();
     });
 
     const deleteButton = document.createElement("button");
@@ -398,6 +612,8 @@ function renderEditableRows(group, body) {
       reindexPoolRows();
       markDirty();
       updateEditorFooter();
+      updateCompatibilityValidation();
+      updateMergeButtonStates();
     });
 
     actions.append(clearButton, deleteButton);
@@ -462,6 +678,8 @@ function setupPoolDragEvents(body) {
     draggedPoolOrder = "";
     if (changed) {
       markDirty();
+      updateCompatibilityValidation();
+      updateMergeButtonStates();
     }
   });
 }
@@ -518,7 +736,7 @@ function renderEditor() {
   done.title = "Keep these edits in the current draft and exit editing mode";
   done.addEventListener("click", () => {
     try {
-      syncEditorIntoDraft();
+      syncValidDraft();
       editingGroupId = null;
       renderAll();
     } catch (error) {
@@ -573,17 +791,20 @@ function renderEditor() {
 
 function renderReadonlyActiveGroup(group, assignmentByPoolId) {
   const panel = document.createElement("section");
-  panel.className = "group-panel";
+  panel.className = "group-panel active-group-panel";
+  panel.dataset.groupId = group.id;
   const header = document.createElement("div");
   header.className = "group-panel-header";
   const title = document.createElement("div");
   title.className = "group-panel-title";
+  const dragHandle = makeDragHandle(`Drag to reorder active group ${group.name}`);
+  dragHandle.classList.add("active-group-drag-handle");
   const strong = document.createElement("strong");
   strong.textContent = group.name;
   const summary = document.createElement("span");
   summary.className = "active-summary";
   summary.textContent = groupSummary(group);
-  title.append(strong, makeBadge("Active"), summary);
+  title.append(dragHandle, strong, makeBadge("Active"), summary);
 
   const actions = document.createElement("div");
   actions.className = "group-panel-actions";
@@ -659,7 +880,7 @@ function selectEditor(groupId) {
     return;
   }
   try {
-    syncEditorIntoDraft();
+    syncValidDraft();
     if (!WTP.groupById(currentConfig, groupId)) {
       throw new Error("That pool group no longer exists.");
     }
@@ -703,15 +924,29 @@ function renderGroups() {
     const actions = document.createElement("div");
     actions.className = "group-actions";
 
+    if (editingGroupId && group.id !== editingGroupId) {
+      const mergeWrap = document.createElement("span");
+      mergeWrap.className = "merge-action-wrap";
+      mergeWrap.dataset.sourceGroupId = group.id;
+      const merge = document.createElement("button");
+      merge.type = "button";
+      merge.className = "merge-button";
+      merge.textContent = "↑";
+      merge.setAttribute("aria-label", `Merge ${group.name} into the group being edited`);
+      merge.addEventListener("click", () => void mergeGroupIntoEdited(group.id));
+      mergeWrap.append(merge);
+      actions.append(mergeWrap);
+    }
+
     const rename = document.createElement("button");
     rename.type = "button";
     rename.textContent = "Rename";
-    rename.addEventListener("click", () => renameGroup(group.id));
+    rename.addEventListener("click", () => void renameGroup(group.id));
 
     const clone = document.createElement("button");
     clone.type = "button";
-    clone.textContent = "Clone group";
-    clone.addEventListener("click", () => cloneGroup(group.id));
+    clone.textContent = "Clone";
+    clone.addEventListener("click", () => void cloneGroup(group.id));
 
     const edit = document.createElement("button");
     edit.type = "button";
@@ -734,12 +969,14 @@ function renderGroups() {
     row.append(dragWrap, nameWrap, summary, actions);
     groupListElement.append(row);
   }
+  updateMergeButtonStates();
 }
 
 function renderAll() {
   renderEditor();
   renderActiveGroups();
   renderGroups();
+  updateCompatibilityValidation();
 }
 
 async function shortcutMap() {
@@ -781,11 +1018,7 @@ function applyShortcutMapToTargets(shortcuts, targets) {
 }
 
 async function commitDraftAndSync() {
-  const draft = syncEditorIntoDraft();
-  const issue = WTP.activeConfigurationIssue(draft);
-  if (issue) {
-    throw new Error(issue.message);
-  }
+  const draft = syncValidDraft();
   const result = await browser.runtime.sendMessage({
     type: "saveConfigAndSync",
     config: draft,
@@ -807,9 +1040,10 @@ async function changeGroupActive(groupId, active) {
     return;
   }
   setMessage(active ? "Loading pool group…" : "Unloading pool group…");
-  const before = structuredClone(currentConfig);
+  let before = null;
   try {
-    syncEditorIntoDraft();
+    syncValidDraft();
+    before = structuredClone(currentConfig);
     if (active) {
       if (currentConfig.allowMultipleGroups) {
         if (!currentConfig.activeGroupIds.includes(groupId)) {
@@ -828,8 +1062,112 @@ async function changeGroupActive(groupId, active) {
     await commitDraftAndSync();
     setMessage(`${active ? "Loaded" : "Unloaded"} group “${group?.name ?? groupId}”.`);
   } catch (error) {
-    currentConfig = before;
-    renderAll();
+    if (before) {
+      currentConfig = before;
+      renderAll();
+    }
+    setMessage(error.message, { error: true });
+  }
+}
+
+async function mergeGroupIntoEdited(sourceGroupId) {
+  if (!currentConfig || !editingGroupId || sourceGroupId === editingGroupId) {
+    return;
+  }
+
+  let before = null;
+  const targetGroupId = editingGroupId;
+  try {
+    syncEditorIntoDraft();
+    const source = WTP.groupById(currentConfig, sourceGroupId);
+    const target = WTP.groupById(currentConfig, targetGroupId);
+    if (!source || !target) {
+      throw new Error("One of the pool groups no longer exists.");
+    }
+
+    const nonDestructiveIssue = WTP.groupMergeIssue(
+      currentConfig, source.id, target.id, { destructive: false },
+    );
+    const destructiveIssue = WTP.groupMergeIssue(
+      currentConfig, source.id, target.id, { destructive: true },
+    );
+    if (nonDestructiveIssue && destructiveIssue) {
+      throw new Error(nonDestructiveIssue.message);
+    }
+
+    const poolWord = source.pools.length === 1 ? "pool" : "pools";
+    const updateMergeDialogState = (destructive) => {
+      const issue = WTP.groupMergeIssue(
+        currentConfig, sourceGroupId, targetGroupId, { destructive },
+      );
+      if (issue) {
+        appDialogInfo.textContent = issue.message;
+        appDialogInfo.hidden = false;
+        appDialogInfo.classList.add("error");
+        appDialogConfirm.disabled = true;
+        return;
+      }
+      appDialogInfo.textContent = destructive
+        ? `“${source.name}” will be removed after its pools are appended.`
+        : `“${source.name}” will remain unchanged after its pools are appended.`;
+      appDialogInfo.hidden = false;
+      appDialogInfo.classList.remove("error");
+      appDialogConfirm.disabled = false;
+    };
+
+    const initialInfo = nonDestructiveIssue
+      ? nonDestructiveIssue.message
+      : `“${source.name}” will remain unchanged after its pools are appended.`;
+    const result = await showAppDialog({
+      title: `Merge “${source.name}” into “${target.name}”`,
+      message: `Append ${source.pools.length} ${poolWord} from “${source.name}” to “${target.name}”.`,
+      checkboxLabel: `Remove “${source.name}” after merging (destructive)`,
+      checkboxValue: false,
+      info: initialInfo,
+      infoError: Boolean(nonDestructiveIssue),
+      confirmLabel: "Merge",
+      confirmDisabled: Boolean(nonDestructiveIssue),
+      onCheckboxChange: updateMergeDialogState,
+    });
+    if (!result.accepted) {
+      return;
+    }
+    const destructive = Boolean(result.checked);
+
+    // The popup may have changed active-group state while the modal was open.
+    // Re-read the live fields merged into our draft and re-run the preflight
+    // for the selected merge mode before committing.
+    syncEditorIntoDraft();
+    const latestSource = WTP.groupById(currentConfig, sourceGroupId);
+    const latestTarget = WTP.groupById(currentConfig, targetGroupId);
+    if (!latestSource || !latestTarget) {
+      throw new Error("One of the pool groups no longer exists.");
+    }
+    const latestIssue = WTP.groupMergeIssue(
+      currentConfig, latestSource.id, latestTarget.id, { destructive },
+    );
+    if (latestIssue) {
+      throw new Error(latestIssue.message);
+    }
+
+    before = structuredClone(currentConfig);
+    currentConfig = WTP.mergeGroups(
+      currentConfig, latestSource.id, latestTarget.id, { destructive },
+    );
+    editingGroupId = latestTarget.id;
+    rowsElement = null;
+    await commitDraftAndSync();
+    setMessage(
+      destructive
+        ? `Merged “${latestSource.name}” into “${latestTarget.name}” and removed “${latestSource.name}”.`
+        : `Merged “${latestSource.name}” into “${latestTarget.name}”; “${latestSource.name}” was kept.`,
+    );
+  } catch (error) {
+    if (before) {
+      currentConfig = before;
+      editingGroupId = targetGroupId;
+      renderAll();
+    }
     setMessage(error.message, { error: true });
   }
 }
@@ -839,14 +1177,29 @@ async function deleteGroup(groupId) {
     return;
   }
   const group = WTP.groupById(currentConfig, groupId);
-  if (!group || !window.confirm(`Delete pool group “${group.name}”?`)) {
+  if (!group) {
+    return;
+  }
+  const confirmed = await requestConfirmation({
+    title: `Delete “${group.name}”?`,
+    message: isGroupActive(group.id)
+      ? "This group is active. Deleting it will unload it and remove its pooled tabs."
+      : "This permanently removes the group from the saved configuration.",
+    confirmLabel: "Delete",
+  });
+  if (!confirmed) {
     return;
   }
 
-  const before = structuredClone(currentConfig);
+  let before = null;
   const beforeEditingId = editingGroupId;
   try {
-    syncEditorIntoDraft();
+    syncValidDraft();
+    const latestGroup = WTP.groupById(currentConfig, groupId);
+    if (!latestGroup) {
+      throw new Error("That pool group no longer exists.");
+    }
+    before = structuredClone(currentConfig);
     currentConfig.poolGroups = currentConfig.poolGroups.filter(
       (candidate) => candidate.id !== groupId,
     );
@@ -860,52 +1213,91 @@ async function deleteGroup(groupId) {
     await commitDraftAndSync();
     setMessage(`Deleted group “${group.name}”.`);
   } catch (error) {
-    currentConfig = before;
-    editingGroupId = beforeEditingId;
-    renderAll();
+    if (before) {
+      currentConfig = before;
+      editingGroupId = beforeEditingId;
+      renderAll();
+    }
     setMessage(error.message, { error: true });
   }
 }
 
-function renameGroup(groupId) {
+async function renameGroup(groupId) {
   if (!currentConfig) {
     return;
   }
+
+  const initialGroup = WTP.groupById(currentConfig, groupId);
+  if (!initialGroup) {
+    return;
+  }
+  const entered = await requestText({
+    title: `Rename “${initialGroup.name}”`,
+    label: "Group name",
+    value: initialGroup.name,
+    confirmLabel: "Rename",
+  });
+  if (entered === null) {
+    return;
+  }
+
+  let before = null;
+  const beforeEditingId = editingGroupId;
   try {
-    syncEditorIntoDraft();
+    syncValidDraft();
+    before = structuredClone(currentConfig);
     const group = WTP.groupById(currentConfig, groupId);
     if (!group) {
-      return;
+      throw new Error("That pool group no longer exists.");
     }
-    const entered = window.prompt("Group name:", group.name);
-    if (entered === null) {
-      return;
-    }
+    const oldName = group.name;
     const requested = entered.trim() || group.name;
     group.name = uniqueGroupName(requested, group.id);
-    markDirty();
-    renderAll();
+    const newName = group.name;
+    await commitDraftAndSync();
+    setMessage(`Renamed “${oldName}” to “${newName}”.`);
   } catch (error) {
+    if (before) {
+      currentConfig = before;
+      editingGroupId = beforeEditingId;
+      renderAll();
+    }
     setMessage(error.message, { error: true });
   }
 }
 
-function cloneGroup(groupId) {
+async function cloneGroup(groupId) {
   if (!currentConfig) {
     return;
   }
+
+  const initialSource = WTP.groupById(currentConfig, groupId);
+  if (!initialSource) {
+    return;
+  }
+  const initialDefaultName = uniqueGroupName(`${initialSource.name} copy`);
+  const entered = await requestText({
+    title: `Clone “${initialSource.name}”`,
+    label: "Name for the cloned group",
+    value: initialDefaultName,
+    confirmLabel: "Clone",
+  });
+  if (entered === null) {
+    return;
+  }
+
+  let before = null;
+  const beforeEditingId = editingGroupId;
   try {
-    syncEditorIntoDraft();
+    syncValidDraft();
+    before = structuredClone(currentConfig);
     const source = WTP.groupById(currentConfig, groupId);
     if (!source) {
-      return;
+      throw new Error("That pool group no longer exists.");
     }
-    const defaultName = uniqueGroupName(`${source.name} copy`);
-    const entered = window.prompt("Name for the cloned group:", defaultName);
-    if (entered === null) {
-      return;
-    }
-    const name = uniqueGroupName(entered.trim() || defaultName);
+    const sourceName = source.name;
+    const fallbackName = uniqueGroupName(`${source.name} copy`);
+    const name = uniqueGroupName(entered.trim() || fallbackName);
     const clone = {
       id: uniqueGroupId(name),
       name,
@@ -914,26 +1306,41 @@ function cloneGroup(groupId) {
     };
     currentConfig.poolGroups.push(clone);
     editingGroupId = clone.id;
-    markDirty();
-    renderAll();
-    setMessage(`Cloned “${source.name}” as “${name}”. Save to keep it.`);
+    await commitDraftAndSync();
+    setMessage(`Cloned “${sourceName}” as “${name}”.`);
   } catch (error) {
+    if (before) {
+      currentConfig = before;
+      editingGroupId = beforeEditingId;
+      renderAll();
+    }
     setMessage(error.message, { error: true });
   }
 }
 
-function createGroup() {
+async function createGroup() {
   if (!currentConfig) {
     return;
   }
+
+  const initialDefaultName = uniqueGroupName("New group");
+  const entered = await requestText({
+    title: "Create pool group",
+    label: "Name for the new group",
+    value: initialDefaultName,
+    confirmLabel: "Create",
+  });
+  if (entered === null) {
+    return;
+  }
+
+  let before = null;
+  const beforeEditingId = editingGroupId;
   try {
-    syncEditorIntoDraft();
-    const defaultName = uniqueGroupName("New group");
-    const entered = window.prompt("Name for the new group:", defaultName);
-    if (entered === null) {
-      return;
-    }
-    const name = uniqueGroupName(entered.trim() || defaultName);
+    syncValidDraft();
+    before = structuredClone(currentConfig);
+    const fallbackName = uniqueGroupName("New group");
+    const name = uniqueGroupName(entered.trim() || fallbackName);
     const group = {
       id: uniqueGroupId(name),
       name,
@@ -942,12 +1349,44 @@ function createGroup() {
     };
     currentConfig.poolGroups.push(group);
     editingGroupId = group.id;
-    markDirty();
-    renderAll();
-    setMessage(`Created “${name}”. Save to keep it.`);
+    await commitDraftAndSync();
+    setMessage(`Created “${name}”.`);
   } catch (error) {
+    if (before) {
+      currentConfig = before;
+      editingGroupId = beforeEditingId;
+      renderAll();
+    }
     setMessage(error.message, { error: true });
   }
+}
+
+function applyRemoteConfiguration(rawConfig, { preserveDraft = dirty } = {}) {
+  const remote = WTP.normalizeConfig(rawConfig);
+  if (!currentConfig || !preserveDraft) {
+    currentConfig = remote;
+    if (editingGroupId && !WTP.groupById(currentConfig, editingGroupId)) {
+      editingGroupId = null;
+    }
+    allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
+    hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
+    muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
+    renderAll();
+    return;
+  }
+
+  // Popup actions only change live/runtime fields. Merge those into an
+  // unsaved settings draft without rebuilding the editor DOM, which preserves
+  // partially typed URLs and other in-progress field values.
+  const localGroupIds = new Set(currentConfig.poolGroups.map((group) => group.id));
+  currentConfig.enabled = remote.enabled;
+  currentConfig.activeGroupIds = remote.activeGroupIds.filter(
+    (groupId) => localGroupIds.has(groupId),
+  );
+  renderActiveGroups();
+  renderGroups();
+  updateEditorFooter();
+  updateCompatibilityValidation();
 }
 
 async function loadPage() {
@@ -989,7 +1428,11 @@ refreshButton.addEventListener("click", async () => {
   setMessage("Reconciling saved active pools…");
   try {
     await browser.runtime.sendMessage({ type: "reconcile" });
-    setMessage("Warm-tab state reconciled.");
+    const saved = await WTP.loadConfig();
+    applyRemoteConfiguration(saved);
+    setMessage(dirty
+      ? "Warm-tab state reconciled; live group state refreshed and unsaved edits preserved."
+      : "Warm-tab state reconciled and settings refreshed.");
   } catch (error) {
     setMessage(error.message, { error: true });
   } finally {
@@ -997,9 +1440,16 @@ refreshButton.addEventListener("click", async () => {
   }
 });
 
+browser.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local" || !changes[WTP.CONFIG_KEY] || !currentConfig) {
+    return;
+  }
+  applyRemoteConfiguration(changes[WTP.CONFIG_KEY].newValue);
+});
+
 shortcutSettingsButton.addEventListener("click", async () => {
   try {
-    syncEditorIntoDraft();
+    syncValidDraft();
     const savedConfig = await WTP.loadConfig();
     shortcutAssignmentTargets = WTP.activePoolAssignments(savedConfig).map(
       (assignment) => ({
@@ -1015,7 +1465,7 @@ shortcutSettingsButton.addEventListener("click", async () => {
   }
 });
 
-createGroupButton.addEventListener("click", createGroup);
+createGroupButton.addEventListener("click", () => void createGroup());
 
 exportConfigButton.addEventListener("click", () => {
   try {
@@ -1036,9 +1486,16 @@ exportConfigButton.addEventListener("click", () => {
   }
 });
 
-importConfigButton.addEventListener("click", () => {
-  if (dirty && !window.confirm("Importing will replace unsaved changes. Continue?")) {
-    return;
+importConfigButton.addEventListener("click", async () => {
+  if (dirty) {
+    const confirmed = await requestConfirmation({
+      title: "Replace unsaved changes?",
+      message: "Importing a configuration will replace the current unsaved settings draft.",
+      confirmLabel: "Import",
+    });
+    if (!confirmed) {
+      return;
+    }
   }
   importFileInput.click();
 });
@@ -1104,9 +1561,7 @@ allowMultipleGroupsInput.addEventListener("change", () => {
   try {
     syncEditorIntoDraft();
     if (!allowMultipleGroupsInput.checked && currentConfig.activeGroupIds.length > 1) {
-      const active = new Set(currentConfig.activeGroupIds);
-      const first = currentConfig.poolGroups.find((group) => active.has(group.id));
-      currentConfig.activeGroupIds = first ? [first.id] : [];
+      currentConfig.activeGroupIds = [currentConfig.activeGroupIds[0]];
       setMessage("Multiple-group mode disabled in the draft; saving will keep only the first active group loaded.");
     }
     markDirty();
@@ -1119,11 +1574,115 @@ allowMultipleGroupsInput.addEventListener("change", () => {
 editorHost.addEventListener("input", (event) => {
   if (event.target.closest(".group-panel.editor")) {
     markDirty();
+    updateCompatibilityValidation();
+    updateMergeButtonStates();
   }
 });
 editorHost.addEventListener("change", (event) => {
   if (event.target.closest(".group-panel.editor")) {
     markDirty();
+    updateCompatibilityValidation();
+    updateMergeButtonStates();
+  }
+});
+
+function activeGroupDomOrder() {
+  return Array.from(
+    activeGroupsHost.querySelectorAll(".active-group-panel"),
+    (panel) => panel.dataset.groupId,
+  );
+}
+
+function mergeVisibleActiveOrder(visibleOrder) {
+  const visibleIds = new Set(visibleOrder);
+  let visibleIndex = 0;
+  return currentConfig.activeGroupIds.map((groupId) => {
+    if (!visibleIds.has(groupId)) {
+      return groupId;
+    }
+    const replacement = visibleOrder[visibleIndex];
+    visibleIndex += 1;
+    return replacement;
+  });
+}
+
+activeGroupsHost.addEventListener("dragstart", (event) => {
+  const handle = event.target.closest(".active-group-drag-handle");
+  if (!handle) {
+    return;
+  }
+  draggedActiveGroupPanel = handle.closest(".active-group-panel");
+  draggedActiveGroupOrder = activeGroupDomOrder().join(",");
+  draggedActiveGroupPanel.classList.add("dragging");
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", draggedActiveGroupPanel.dataset.groupId);
+});
+
+activeGroupsHost.addEventListener("dragover", (event) => {
+  if (!draggedActiveGroupPanel) {
+    return;
+  }
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  const target = event.target.closest(".active-group-panel");
+  if (!target || target === draggedActiveGroupPanel) {
+    return;
+  }
+  const rect = target.getBoundingClientRect();
+  const after = event.clientY > rect.top + rect.height / 2;
+  activeGroupsHost.insertBefore(
+    draggedActiveGroupPanel,
+    after ? target.nextSibling : target,
+  );
+});
+
+activeGroupsHost.addEventListener("drop", (event) => {
+  if (draggedActiveGroupPanel) {
+    event.preventDefault();
+  }
+});
+
+activeGroupsHost.addEventListener("dragend", async () => {
+  if (!draggedActiveGroupPanel || !currentConfig) {
+    return;
+  }
+  draggedActiveGroupPanel.classList.remove("dragging");
+  const visibleOrder = activeGroupDomOrder();
+  const changed = visibleOrder.join(",") !== draggedActiveGroupOrder;
+  draggedActiveGroupPanel = null;
+  draggedActiveGroupOrder = "";
+  if (!changed) {
+    return;
+  }
+
+  const issue = updateCompatibilityValidation();
+  if (issue) {
+    renderActiveGroups();
+    return;
+  }
+
+  const beforeOrder = [...currentConfig.activeGroupIds];
+  const nextOrder = mergeVisibleActiveOrder(visibleOrder);
+  currentConfig.activeGroupIds = nextOrder;
+  renderActiveGroups();
+  renderGroups();
+  try {
+    await browser.runtime.sendMessage({
+      type: "reorderActiveGroups",
+      groupIds: nextOrder,
+    });
+    const saved = await WTP.loadConfig();
+    currentConfig.activeGroupIds = saved.activeGroupIds.filter(
+      (groupId) => Boolean(WTP.groupById(currentConfig, groupId)),
+    );
+    renderActiveGroups();
+    renderGroups();
+    setMessage("Reordered active groups.");
+  } catch (error) {
+    currentConfig.activeGroupIds = beforeOrder;
+    renderActiveGroups();
+    renderGroups();
+    setMessage(error.message, { error: true });
   }
 });
 
@@ -1165,7 +1724,7 @@ groupListElement.addEventListener("drop", (event) => {
   }
 });
 
-groupListElement.addEventListener("dragend", () => {
+groupListElement.addEventListener("dragend", async () => {
   if (!draggedGroupRow || !currentConfig) {
     return;
   }
@@ -1179,16 +1738,20 @@ groupListElement.addEventListener("dragend", () => {
     return;
   }
 
+  let before = null;
+  const beforeEditingId = editingGroupId;
   try {
-    syncEditorIntoDraft();
+    syncValidDraft();
+    before = structuredClone(currentConfig);
     const byId = new Map(currentConfig.poolGroups.map((group) => [group.id, group]));
     currentConfig.poolGroups = order.map((id) => byId.get(id)).filter(Boolean);
-    currentConfig.activeGroupIds = currentConfig.poolGroups
-      .filter((group) => currentConfig.activeGroupIds.includes(group.id))
-      .map((group) => group.id);
-    markDirty();
-    renderAll();
+    await commitDraftAndSync();
+    setMessage("Reordered pool groups.");
   } catch (error) {
+    if (before) {
+      currentConfig = before;
+      editingGroupId = beforeEditingId;
+    }
     setMessage(error.message, { error: true });
     renderAll();
   }

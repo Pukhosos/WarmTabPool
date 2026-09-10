@@ -3,6 +3,7 @@
 const OWNER = "warm-tab-pool";
 let operationQueue = Promise.resolve();
 let reconcileTimer = null;
+let configSyncTimer = null;
 const knownPoolTabIds = new Set();
 
 function serialized(task) {
@@ -20,6 +21,16 @@ function scheduleReconcile(delayMs = 150) {
   reconcileTimer = setTimeout(() => {
     reconcileTimer = null;
     void serialized(reconcilePools);
+  }, delayMs);
+}
+
+function scheduleConfigSync(delayMs = 50) {
+  if (configSyncTimer !== null) {
+    clearTimeout(configSyncTimer);
+  }
+  configSyncTimer = setTimeout(() => {
+    configSyncTimer = null;
+    void serialized(syncSavedConfiguration);
   }, delayMs);
 }
 
@@ -337,6 +348,7 @@ async function popupState({ reconcile = false } = {}) {
     enabled: config.enabled,
     allowMultipleGroups: config.allowMultipleGroups,
     maxActivePools: WTP.MAX_POOLS,
+    activePoolCount: WTP.activePoolAssignments(config).length,
     activeGroupIds: [...config.activeGroupIds],
     groups: config.poolGroups.map((group) => ({
       id: group.id,
@@ -496,57 +508,113 @@ async function applyShortcuts(config) {
   }
 }
 
-async function syncActiveGroups() {
+async function syncSavedConfiguration() {
   const config = await WTP.loadConfig();
   WTP.assertActiveConfiguration(config);
   await applyShortcuts(config);
   await reconcilePools();
+  return config;
+}
+
+async function commitConfiguration(rawConfig, previousConfig = null) {
+  const previous = previousConfig ?? await WTP.loadConfig();
+  const next = WTP.normalizeConfig(rawConfig);
+  WTP.assertActiveConfiguration(next);
+
+  // Treat shortcut assignment + persisted configuration as one transition.
+  // If persistence fails after Firefox accepted the new command mapping, put
+  // the previous mapping back so the runtime never intentionally straddles
+  // two configurations.
+  await applyShortcuts(next);
+  let saved;
+  try {
+    saved = await WTP.saveConfig(next);
+  } catch (error) {
+    try {
+      await applyShortcuts(previous);
+    } catch (rollbackError) {
+      console.error("Could not roll back shortcut mapping:", rollbackError);
+    }
+    throw error;
+  }
+
+  try {
+    await reconcilePools();
+  } catch (error) {
+    // The configuration and command mapping are already committed. Treat pool
+    // repair as a retryable side effect instead of reporting the transition as
+    // rolled back when it was not.
+    console.error("Configuration committed, but warm-tab reconciliation failed:", error);
+    scheduleReconcile(500);
+  }
+  return saved;
+}
+
+async function transitionConfiguration(mutator) {
+  const config = await WTP.loadConfig();
+  const draft = structuredClone(config);
+  await mutator(draft);
+  return commitConfiguration(draft, config);
+}
+
+async function syncActiveGroups() {
+  await syncSavedConfiguration();
   return popupState();
 }
 
 async function saveConfigAndSync(rawConfig) {
-  const config = WTP.normalizeConfig(rawConfig);
-  WTP.assertActiveConfiguration(config);
-  await applyShortcuts(config);
-  const saved = await WTP.saveConfig(config);
-  await reconcilePools();
+  const saved = await commitConfiguration(rawConfig);
   return { config: saved, state: await popupState() };
 }
 
 async function setGroupActive(groupId, active) {
-  const config = await WTP.loadConfig();
-  const group = WTP.groupById(config, groupId);
-  if (!group) {
-    throw new Error("That pool group no longer exists");
-  }
-
-  const activeIds = new Set(config.activeGroupIds);
-  if (active) {
-    if (config.allowMultipleGroups) {
-      activeIds.add(groupId);
-    } else {
-      activeIds.clear();
-      activeIds.add(groupId);
+  await transitionConfiguration((config) => {
+    const group = WTP.groupById(config, groupId);
+    if (!group) {
+      throw new Error("That pool group no longer exists");
     }
-  } else {
-    activeIds.delete(groupId);
-  }
-  config.activeGroupIds = config.poolGroups
-    .map((candidate) => candidate.id)
-    .filter((id) => activeIds.has(id));
 
-  WTP.assertActiveConfiguration(config);
-  await applyShortcuts(config);
-  await WTP.saveConfig(config);
-  await reconcilePools();
+    if (active) {
+      if (config.allowMultipleGroups) {
+        if (!config.activeGroupIds.includes(groupId)) {
+          config.activeGroupIds.push(groupId);
+        }
+      } else {
+        config.activeGroupIds = [groupId];
+      }
+    } else {
+      config.activeGroupIds = config.activeGroupIds.filter((id) => id !== groupId);
+    }
+  });
+  return popupState();
+}
+
+async function reorderActiveGroups(rawOrder) {
+  await transitionConfiguration((config) => {
+    const activeIds = new Set(config.activeGroupIds);
+    const reordered = [];
+    const requested = Array.isArray(rawOrder) ? rawOrder : [];
+
+    for (const rawId of requested) {
+      const id = String(rawId ?? "");
+      if (activeIds.has(id) && !reordered.includes(id)) {
+        reordered.push(id);
+      }
+    }
+    for (const id of config.activeGroupIds) {
+      if (!reordered.includes(id)) {
+        reordered.push(id);
+      }
+    }
+    config.activeGroupIds = reordered;
+  });
   return popupState();
 }
 
 async function setEnabled(enabled) {
-  const config = await WTP.loadConfig();
-  config.enabled = Boolean(enabled);
-  await WTP.saveConfig(config);
-  await reconcilePools();
+  await transitionConfiguration((config) => {
+    config.enabled = Boolean(enabled);
+  });
   return popupState();
 }
 
@@ -568,7 +636,10 @@ browser.runtime.onStartup.addListener(() => {
 
 browser.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes[WTP.CONFIG_KEY]) {
-    scheduleReconcile();
+    // A configuration write can originate from any extension page (or from a
+    // future migration). Always run the full state transition: validation,
+    // Firefox command assignment, and warm-tab reconciliation.
+    scheduleConfigSync();
   }
 });
 
@@ -646,6 +717,9 @@ browser.runtime.onMessage.addListener((message) => {
       String(message.groupId ?? ""),
       Boolean(message.active),
     ));
+  }
+  if (message.type === "reorderActiveGroups") {
+    return serialized(() => reorderActiveGroups(message.groupIds));
   }
   // Backward-compatible message name from v1.2 popup: activating replaces the
   // active set only when multi-group mode is disabled; otherwise it adds.
