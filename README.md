@@ -75,7 +75,7 @@ While a group is being edited, every other group also gets an **↑** merge acti
 
 For a destructive merge, if the source group was active while the edited group was inactive, the edited target takes the source group's active position so an active group is not silently lost. A non-destructive merge leaves the source group's stored and active state unchanged.
 
-Merge compatibility is preflighted continuously against the current editor draft for both modes. A mode is incompatible if the resulting edited group would exceed 32 pools, if a non-empty shortcut would be duplicated inside the merged group, or if the resulting active-group configuration would exceed the 32 command slots or conflict with another active shortcut. The **↑** action is disabled only when neither non-destructive nor destructive merging is possible. If only one mode is possible, the dialog remains available and disables **Merge** until the compatible checkbox state is selected. Hover text and the dialog's information line explain the concrete reason, including the conflicting shortcut.
+Merge compatibility is preflighted continuously against the current editor draft for both modes. Two groups cannot be merged while both are active; unload at least one of them first. Otherwise, a mode is incompatible if the resulting edited group would exceed 32 pools, if a non-empty shortcut would be duplicated inside the merged group, or if the resulting active-group configuration would exceed the 32 command slots or conflict with another active shortcut. The **↑** action is disabled only when neither non-destructive nor destructive merging is possible. If only one mode is possible, the dialog remains available and disables **Merge** until the compatible checkbox state is selected. Hover text and the dialog's information line explain the concrete reason.
 
 Creating a group with the bottom **+** button asks for the group name, with a generated default value. The old global group-name field is gone.
 
@@ -108,7 +108,7 @@ Loading/unloading groups and changing active-group order are also live transitio
 
 The settings page and popup no longer expose manual refresh/reconciliation buttons. Background reconciliation remains automatic because it is part of the pool lifecycle; UI status updates do not request an extra repair pass.
 
-While an active group is being edited, shortcut/pool-limit compatibility is checked against all other active groups as the draft changes. An incompatible draft is reported immediately, disables Save, and cannot be closed with **Done** or committed until the conflict is resolved.
+While a group is being edited, non-empty shortcuts must be unique within that group. Duplicate shortcuts are rejected even when the group is inactive: the conflict is reported in the editor, disables **Save**, and **Done** refuses to close the editor until it is fixed. For active groups, pool-limit and cross-group shortcut compatibility are also checked against the full active set.
 
 Leaving or reloading the settings page with unsaved changes invokes Firefox's native `beforeunload` confirmation. Firefox controls the exact wording, but the semantics are preserve the draft by staying or discard it by leaving.
 
@@ -131,18 +131,13 @@ The popup's pool list is grouped by active group. Enabled pools show ready/loadi
 
 The popup shows `N of 32 shortcut slots used`, where `N` counts every pool row in the active groups (disabled rows still consume command slots). **Settings** is available in the popup header. Pool status is polled cheaply every 500 ms, while configuration storage changes trigger an immediate state update; neither path requests a manual full reconciliation.
 
-## Configuration schema and migration
+## Configuration format
 
-Version 1.4.0 uses configuration schema version 4.
+Version 1.0.0 uses configuration format version 1.
 
-Important schema changes include:
+The stored configuration uses `activeGroupIds` for active-group order, `allowMultipleGroups` for single- versus multi-group activation, stable IDs for groups and pools, and a per-group shortcut array. Warm-tab session membership is version 1 and stores the owning `groupId`, `poolId`, and URL.
 
-- `activeGroupIds` replaces the old single `activeGroupId`;
-- `allowMultipleGroups` controls single- versus multi-group activation;
-- every pool has a stable internal `id`; and
-- warm-tab session membership is version 2 and stores `groupId` plus `poolId`.
-
-Versions 1–3 are normalized automatically. A legacy `activeGroupId` becomes a one-element `activeGroupIds` array. Existing pool rows receive deterministic IDs. Legacy version-1 warm tabs are still recognized during reconciliation and removed so they cannot become orphaned after the membership schema change.
+Every group must use unique non-empty shortcuts across its pool rows. The same validation is enforced by the settings editor, imports, background commits, and startup synchronization, so an invalid group cannot be persisted through an alternate path.
 
 Explicit configurations with an empty `poolGroups` array remain empty. A genuinely fresh installation receives the normal Default group with one empty pool.
 
@@ -186,7 +181,7 @@ Normal tab-management APIs are used to create, show, activate, move, mute, reloa
 There is no build step and no dependency bundle.
 
 - `manifest.json` — WebExtension manifest and 32 statically declared command slots.
-- `common.js` — configuration schema, migration, active-group allocation, and validation.
+- `common.js` — configuration format, active-group allocation, and validation.
 - `background.js` — pool lifecycle plus the serialized configuration transition state machine (validation, command assignment, persistence, reconciliation), and popup state.
 - `popup/` — toolbar popup/status/group toggles.
 - `options/` — settings UI, active-group editor, compatibility graph, drag/drop, import/export.

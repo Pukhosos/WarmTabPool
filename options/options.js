@@ -460,9 +460,9 @@ function previewConfigWithEditor() {
   return WTP.normalizeConfig(draft);
 }
 
-function previewActiveConfigurationIssue() {
+function previewDraftIssue() {
   const draft = previewConfigWithEditor();
-  return draft ? WTP.activeConfigurationIssue(draft) : null;
+  return draft ? WTP.configurationIssue(draft) : null;
 }
 
 function updateMergeButtonStates() {
@@ -505,7 +505,7 @@ function updateMergeButtonStates() {
 }
 
 function updateCompatibilityValidation({ announce = true } = {}) {
-  const issue = previewActiveConfigurationIssue();
+  const issue = previewDraftIssue();
   draftCompatibilityIssue = issue;
   updateSaveButton();
 
@@ -522,7 +522,7 @@ function updateCompatibilityValidation({ announce = true } = {}) {
 }
 
 function assertDraftCompatibility(config = currentConfig) {
-  const issue = WTP.activeConfigurationIssue(config);
+  const issue = WTP.configurationIssue(config);
   if (issue) {
     draftCompatibilityIssue = issue;
     compatibilityMessage = issue.message;
@@ -2106,23 +2106,14 @@ importFileInput.addEventListener("change", async () => {
     if (
       !raw
       || typeof raw !== "object"
-      || (!Array.isArray(raw.poolGroups) && !Array.isArray(raw.pools))
+      || raw.version !== WTP.CONFIG_VERSION
+      || !Array.isArray(raw.poolGroups)
+      || !Array.isArray(raw.activeGroupIds)
     ) {
-      throw new Error("This JSON file is not a Warm Tab Pool configuration.");
+      throw new Error(`This JSON file is not a Warm Tab Pool configuration version ${WTP.CONFIG_VERSION}.`);
     }
 
     const imported = WTP.normalizeConfig(raw);
-    const hasShortcutData = Array.isArray(raw.poolGroups)
-      ? raw.poolGroups.some((group) => Array.isArray(group?.shortcuts))
-      : Array.isArray(raw.shortcuts);
-    if (!hasShortcutData) {
-      const shortcuts = await shortcutMap();
-      for (const assignment of WTP.activePoolAssignments(imported)) {
-        assignment.group.shortcuts[assignment.pool.slot - 1] = (
-          shortcuts.get(WTP.commandName(assignment.commandSlot)) ?? ""
-        );
-      }
-    }
 
     const result = await browser.runtime.sendMessage({
       type: "saveConfigAndSync",

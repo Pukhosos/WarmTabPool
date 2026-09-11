@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Warm Tab Pool",
-  "version": "1.4.0",
+  "version": "1.0.0",
   "description": "Keep a pool of preloaded web pages.",
   "permissions": [
     "storage",
@@ -122,7 +122,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "warm-tab-pool-6f4a0f63@local.invalid",
+      "id": "warm-tab-pool-48332f5d@local.invalid",
       "data_collection_permissions": {
         "required": [
           "none"

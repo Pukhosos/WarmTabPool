@@ -7,8 +7,9 @@
   const DEFAULT_POOL_SIZE = 1;
   const DEFAULT_GROUP_ID = "default";
   const CONFIG_KEY = "config";
+  const CONFIG_VERSION = 1;
   const TAB_VALUE_KEY = "warm-tab-pool:membership";
-  const TAB_VALUE_VERSION = 2;
+  const TAB_VALUE_VERSION = 1;
 
   function defaultPool(slot, id = `pool-${slot}`) {
     return {
@@ -40,7 +41,7 @@
 
   function defaultConfig() {
     return {
-      version: 4,
+      version: CONFIG_VERSION,
       enabled: true,
       hideWarmTabs: true,
       muteWarmTabs: true,
@@ -153,76 +154,43 @@
     if (!raw || typeof raw !== "object") {
       return defaultConfig();
     }
+
     const source = raw;
-    const rawGroups = Array.isArray(source.poolGroups)
-      ? source.poolGroups
-      : null;
+    if (
+      source.version !== CONFIG_VERSION
+      || !Array.isArray(source.poolGroups)
+      || !Array.isArray(source.activeGroupIds)
+    ) {
+      return defaultConfig();
+    }
 
     const groups = [];
     const usedIds = new Set();
 
-    if (rawGroups) {
-      for (const [index, rawGroup] of rawGroups.entries()) {
-        const fallbackId = index === 0
-          ? DEFAULT_GROUP_ID
-          : `group-${index + 1}`;
-        const fallbackName = index === 0 ? "Default" : `Group ${index + 1}`;
-        const normalized = normalizeGroup(rawGroup, fallbackId, fallbackName);
+    for (const [index, rawGroup] of source.poolGroups.entries()) {
+      const fallbackId = index === 0
+        ? DEFAULT_GROUP_ID
+        : `group-${index + 1}`;
+      const fallbackName = index === 0 ? "Default" : `Group ${index + 1}`;
+      const normalized = normalizeGroup(rawGroup, fallbackId, fallbackName);
 
-        let id = normalized.id;
-        if (usedIds.has(id)) {
-          const base = id;
-          let suffix = 2;
-          while (usedIds.has(`${base}-${suffix}`)) {
-            suffix += 1;
-          }
-          id = `${base}-${suffix}`;
+      let id = normalized.id;
+      if (usedIds.has(id)) {
+        const base = id;
+        let suffix = 2;
+        while (usedIds.has(`${base}-${suffix}`)) {
+          suffix += 1;
         }
-
-        usedIds.add(id);
-        groups.push({ ...normalized, id });
-      }
-    }
-
-    // Version-1 configurations had one top-level `pools` array and no groups.
-    if (!rawGroups && Array.isArray(source.pools)) {
-      const legacyPools = normalizePools(source.pools);
-      for (const [index, pool] of legacyPools.entries()) {
-        const rawPool = source.pools[index] ?? {};
-        const defaultName = `Pool ${index + 1}`;
-        const untouchedLegacyDefault = (
-          rawPool.enabled !== true
-          && !String(rawPool.url ?? "").trim()
-          && String(rawPool.name ?? defaultName).trim() === defaultName
-          && Number(rawPool.size) === 2
-        );
-        if (untouchedLegacyDefault) {
-          pool.size = DEFAULT_POOL_SIZE;
-        }
+        id = `${base}-${suffix}`;
       }
 
-      groups.push({
-        id: DEFAULT_GROUP_ID,
-        name: "Default",
-        pools: legacyPools,
-        shortcuts: normalizeShortcuts(source.shortcuts),
-      });
-      usedIds.add(DEFAULT_GROUP_ID);
+      usedIds.add(id);
+      groups.push({ ...normalized, id });
     }
 
     const validIds = new Set(groups.map((group) => group.id));
-    let requestedIds;
-    if (Array.isArray(source.activeGroupIds)) {
-      requestedIds = source.activeGroupIds;
-    } else if (source.activeGroupId !== undefined && source.activeGroupId !== null) {
-      // Versions 2 and 3 had one activeGroupId.
-      requestedIds = [source.activeGroupId];
-    } else {
-      requestedIds = groups.length > 0 ? [groups[0].id] : [];
-    }
-
     const activeGroupIds = [];
-    for (const rawId of requestedIds) {
+    for (const rawId of source.activeGroupIds) {
       const id = String(rawId ?? "").trim();
       if (id && validIds.has(id) && !activeGroupIds.includes(id)) {
         activeGroupIds.push(id);
@@ -235,7 +203,7 @@
     }
 
     return {
-      version: 4,
+      version: CONFIG_VERSION,
       enabled: source.enabled !== false,
       hideWarmTabs: source.hideWarmTabs !== false,
       muteWarmTabs: source.muteWarmTabs !== false,
@@ -273,6 +241,41 @@
     }
 
     return assignments;
+  }
+
+  function groupShortcutIssue(group) {
+    const seen = new Map();
+    for (const pool of group.pools) {
+      const shortcut = String(group.shortcuts[pool.slot - 1] ?? "").trim();
+      if (!shortcut) {
+        continue;
+      }
+
+      const key = shortcut.toLocaleLowerCase("en-US");
+      const previous = seen.get(key);
+      if (previous) {
+        return {
+          code: "group-shortcut-collision",
+          group,
+          shortcut,
+          first: previous,
+          second: pool,
+          message: `Cannot save group “${group.name}”: shortcut “${shortcut}” is assigned to both “${previous.name}” and “${pool.name}”.`,
+        };
+      }
+      seen.set(key, pool);
+    }
+    return null;
+  }
+
+  function configurationIssue(config) {
+    for (const group of config.poolGroups) {
+      const issue = groupShortcutIssue(group);
+      if (issue) {
+        return issue;
+      }
+    }
+    return activeConfigurationIssue(config);
   }
 
   function activeConfigurationIssue(config) {
@@ -440,6 +443,15 @@
       };
     }
 
+    const sourceIsActive = normalized.activeGroupIds.includes(source.id);
+    const targetIsActive = normalized.activeGroupIds.includes(target.id);
+    if (sourceIsActive && targetIsActive) {
+      return {
+        code: "merge-both-active",
+        message: "Cannot merge while both groups are active. Unload at least one of them first.",
+      };
+    }
+
     const mergedPoolCount = target.pools.length + source.pools.length;
     if (mergedPoolCount > MAX_POOLS) {
       return {
@@ -494,6 +506,13 @@
     }
   }
 
+  function assertConfiguration(config) {
+    const issue = configurationIssue(config);
+    if (issue) {
+      throw new Error(issue.message);
+    }
+  }
+
   async function loadConfig() {
     const stored = await browser.storage.local.get(CONFIG_KEY);
     const normalized = normalizeConfig(stored[CONFIG_KEY]);
@@ -537,6 +556,7 @@
     DEFAULT_POOL_SIZE,
     DEFAULT_GROUP_ID,
     CONFIG_KEY,
+    CONFIG_VERSION,
     TAB_VALUE_KEY,
     TAB_VALUE_VERSION,
     defaultPool,
@@ -551,11 +571,14 @@
     groupById,
     activeGroups,
     activePoolAssignments,
+    groupShortcutIssue,
+    configurationIssue,
     activeConfigurationIssue,
     groupActivationIssue,
     groupMergeIssue,
     mergeGroups,
     assertActiveConfiguration,
+    assertConfiguration,
     loadConfig,
     saveConfig,
     commandName,

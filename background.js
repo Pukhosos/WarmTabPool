@@ -49,16 +49,6 @@ async function readMembership(tabId) {
       return null;
     }
 
-    // Accept v1 solely so old warm tabs can be discovered and removed during
-    // migration. New tabs always receive v2 membership with group/pool IDs.
-    if (
-      value.version === 1
-      && Number.isInteger(value.slot)
-      && typeof value.url === "string"
-    ) {
-      return value;
-    }
-
     if (
       value.version === WTP.TAB_VALUE_VERSION
       && typeof value.groupId === "string"
@@ -503,7 +493,7 @@ async function applyShortcuts(config) {
 
 async function syncSavedConfiguration() {
   const config = await WTP.loadConfig();
-  WTP.assertActiveConfiguration(config);
+  WTP.assertConfiguration(config);
   await applyShortcuts(config);
   await reconcilePools();
   return config;
@@ -512,7 +502,7 @@ async function syncSavedConfiguration() {
 async function commitConfiguration(rawConfig, previousConfig = null) {
   const previous = previousConfig ?? await WTP.loadConfig();
   const next = WTP.normalizeConfig(rawConfig);
-  WTP.assertActiveConfiguration(next);
+  WTP.assertConfiguration(next);
 
   // Treat shortcut assignment + persisted configuration as one transition.
   // If persistence fails after Firefox accepted the new command mapping, put
@@ -629,8 +619,8 @@ browser.runtime.onStartup.addListener(() => {
 
 browser.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes[WTP.CONFIG_KEY]) {
-    // A configuration write can originate from any extension page (or from a
-    // future migration). Always run the full state transition: validation,
+    // A configuration write can originate from any extension page. Always run
+    // the full state transition: validation,
     // Firefox command assignment, and warm-tab reconciliation.
     scheduleConfigSync();
   }
@@ -661,7 +651,7 @@ browser.tabs.onActivated.addListener(({ tabId }) => {
 
     const config = await WTP.loadConfig();
     await markAsNormalTab(tabId);
-    if (membership.version !== WTP.TAB_VALUE_VERSION || !config.enabled) {
+    if (!config.enabled) {
       return;
     }
 
@@ -690,7 +680,7 @@ browser.runtime.onMessage.addListener((message) => {
   if (message.type === "warm") {
     return serialized(() => warmBestCandidate(Number(message.slot)));
   }
-  if (message.type === "syncActiveGroups" || message.type === "syncActiveGroup") {
+  if (message.type === "syncActiveGroups") {
     return serialized(syncActiveGroups);
   }
   if (message.type === "saveConfigAndSync") {
@@ -705,11 +695,6 @@ browser.runtime.onMessage.addListener((message) => {
   if (message.type === "reorderActiveGroups") {
     return serialized(() => reorderActiveGroups(message.groupIds));
   }
-  // Backward-compatible message name from v1.2 popup: activating replaces the
-  // active set only when multi-group mode is disabled; otherwise it adds.
-  if (message.type === "activateGroup") {
-    return serialized(() => setGroupActive(String(message.groupId ?? ""), true));
-  }
   if (message.type === "setEnabled") {
     return serialized(() => setEnabled(Boolean(message.enabled)));
   }
@@ -720,7 +705,7 @@ browser.runtime.onMessage.addListener((message) => {
 });
 
 // Event pages can start for reasons other than startup/install. Reconcile even
-// if shortcut synchronization fails, so stale v1 warm tabs are still cleaned.
+// if shortcut synchronization fails.
 void serialized(async () => {
   try {
     await syncActiveGroups();
