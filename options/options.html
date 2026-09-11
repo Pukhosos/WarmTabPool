@@ -45,10 +45,10 @@
       <div class="section-title">
         <div>
           <h2>Active pools</h2>
-          <p class="hint">Type shortcuts as text, for example <code>Ctrl+Shift+1</code> or <code>F13</code>; do not press the key combination to edit the shortcut field. Leave blank for no shortcut. Total number of active pools must not exceed <span id="activePoolLimit">32</span>.</p>
+          <p class="hint">Type shortcuts as text, for example <code>Ctrl+Shift+1</code> or <code>F13</code>. Leave blank for no shortcut.</p>
         </div>
         <div class="section-buttons">
-          <button id="shortcutSettings" type="button">Firefox shortcut settings</button>
+          <button id="shortcutSettings" type="button">Browser shortcut settings</button>
         </div>
       </div>
 
@@ -61,7 +61,6 @@
       <div class="section-title group-section-title">
         <div>
           <h2>Pool groups</h2>
-          <p class="hint">Groups store separate pool layouts and shortcuts.</p>
         </div>
         <div class="config-buttons">
           <button id="importConfig" type="button">Import JSON</button>
@@ -74,9 +73,20 @@
       <button id="createGroup" class="plus-button group-plus" type="button" aria-label="New group" title="New group">+</button>
     </section>
 
+    <section class="card" id="groupGraphCard" aria-labelledby="groupGraphHeading">
+      <div class="group-graph-title">
+        <div>
+          <h2 id="groupGraphHeading">Group graph</h2>
+          <p class="group-graph-hint">Currently loaded groups are highlighted. Solid edges can coexist with the groups loaded now. Dotted edges can coexist as a pair.</p>
+        </div>
+        <button id="resetGroupGraph" type="button">To default arrangement</button>
+      </div>
+      <div id="groupGraph" class="group-graph" role="group" aria-label="Pool group compatibility graph"></div>
+      <p id="groupGraphEmpty" class="empty-state graph-empty" hidden>No groups to display.</p>
+    </section>
+
     <div class="actions">
       <div id="message" role="status" aria-live="polite"></div>
-      <button id="refresh" class="icon-button" type="button" aria-label="Reconcile warm tabs" title="Reconcile the saved active groups now: remove stale tabs, reload discarded tabs, reapply settings, and create/remove tabs to match configured sizes.">↻</button>
       <button id="save" class="primary" type="button" disabled>Save</button>
     </div>
   </main>

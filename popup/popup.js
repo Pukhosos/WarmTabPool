@@ -4,21 +4,24 @@ const poolsElement = document.querySelector("#pools");
 const groupsElement = document.querySelector("#groups");
 const groupMessage = document.querySelector("#groupMessage");
 const multiModeElement = document.querySelector("#multiMode");
-const refreshButton = document.querySelector("#refresh");
 const enabledInput = document.querySelector("#enabled");
 const enabledLabel = document.querySelector("#enabledLabel");
 const optionsButton = document.querySelector("#options");
 
-const AUTO_REFRESH_MS = 500;
+const STATUS_POLL_MS = 500;
 let shortcuts = new Map();
 let poolRenderSignature = null;
 let groupRenderSignature = null;
-let refreshInFlight = false;
+let stateUpdateInFlight = false;
 let interactionInFlight = false;
 
 function setGroupMessage(text, { error = false } = {}) {
   groupMessage.textContent = text;
   groupMessage.classList.toggle("error", error);
+}
+
+function countLabel(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function poolMeta(status) {
@@ -42,7 +45,7 @@ function groupSignatureFor(state) {
     interactionInFlight,
     ...state.groups.map((group) => (
       `${group.id}\u0000${group.name}\u0000${group.active}`
-      + `\u0000${group.poolCount}\u0000${group.warmTabCount}`
+      + `\u0000${group.loadError}\u0000${group.poolCount}\u0000${group.warmTabCount}`
     )),
   ].join("\u0001");
 }
@@ -60,7 +63,7 @@ function poolSignatureFor(state) {
 }
 
 function renderGroups(state) {
-  multiModeElement.textContent = `${state.activePoolCount} of ${state.maxActivePools} active pools used`;
+  multiModeElement.textContent = `${state.activePoolCount} of ${state.maxActivePools} shortcut slots used`;
 
   const signature = groupSignatureFor(state);
   if (signature === groupRenderSignature) {
@@ -92,8 +95,20 @@ function renderGroups(state) {
     name.title = group.name;
     const meta = document.createElement("span");
     meta.className = "group-meta";
-    meta.textContent = `${group.poolCount} pools · ${group.warmTabCount} warm tabs`;
+    meta.textContent = `${countLabel(group.poolCount, "pool")} · ${countLabel(group.warmTabCount, "warm tab")}`;
     info.append(name, meta);
+
+    const stateControls = document.createElement("div");
+    stateControls.className = "group-state-controls";
+    if (!group.active && group.loadError) {
+      const warning = document.createElement("span");
+      warning.className = "group-load-warning";
+      warning.textContent = "!";
+      warning.title = group.loadError;
+      warning.setAttribute("role", "img");
+      warning.setAttribute("aria-label", `Cannot load ${group.name}: ${group.loadError}`);
+      stateControls.append(warning);
+    }
 
     const label = document.createElement("label");
     label.className = "group-switch";
@@ -107,6 +122,7 @@ function renderGroups(state) {
     switchVisual.className = "switch";
     switchVisual.setAttribute("aria-hidden", "true");
     label.append(input, switchVisual);
+    stateControls.append(label);
 
     input.addEventListener("change", async () => {
       const wanted = input.checked;
@@ -127,7 +143,7 @@ function renderGroups(state) {
       } catch (error) {
         input.checked = !wanted;
         setGroupMessage(error.message, { error: true });
-        await refresh();
+        await updateState();
       } finally {
         interactionInFlight = false;
         enabledInput.disabled = false;
@@ -138,7 +154,7 @@ function renderGroups(state) {
       }
     });
 
-    row.append(info, label);
+    row.append(info, stateControls);
     groupsElement.append(row);
   }
 }
@@ -288,42 +304,27 @@ async function loadShortcuts() {
   ));
 }
 
-async function refresh({
-  reconcile = false,
-  indicate = false,
-  reloadShortcuts = false,
-} = {}) {
-  if (refreshInFlight || interactionInFlight) {
+async function updateState({ reloadShortcuts = false } = {}) {
+  if (stateUpdateInFlight || interactionInFlight) {
     return;
   }
-  refreshInFlight = true;
-  if (indicate) {
-    refreshButton.disabled = true;
-  }
+  stateUpdateInFlight = true;
 
   try {
-    if (reconcile || reloadShortcuts) {
+    if (reloadShortcuts) {
       await loadShortcuts().catch(() => {});
     }
     const state = await browser.runtime.sendMessage({
       type: "getPopupState",
-      reconcile,
     });
     render(state);
   } catch (error) {
     poolRenderSignature = null;
     poolsElement.textContent = `Could not read pool status: ${error.message}`;
   } finally {
-    if (indicate) {
-      refreshButton.disabled = false;
-    }
-    refreshInFlight = false;
+    stateUpdateInFlight = false;
   }
 }
-
-refreshButton.addEventListener("click", () => {
-  void refresh({ reconcile: true, indicate: true });
-});
 
 enabledInput.addEventListener("change", async () => {
   interactionInFlight = true;
@@ -358,7 +359,7 @@ browser.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes[WTP.CONFIG_KEY]) {
     poolRenderSignature = null;
     groupRenderSignature = null;
-    void refresh({ reloadShortcuts: true });
+    void updateState({ reloadShortcuts: true });
   }
 });
 
@@ -368,8 +369,8 @@ async function start() {
   } catch {
     shortcuts = new Map();
   }
-  await refresh();
-  window.setInterval(() => void refresh(), AUTO_REFRESH_MS);
+  await updateState();
+  window.setInterval(() => void updateState(), STATUS_POLL_MS);
 }
 
 void start();

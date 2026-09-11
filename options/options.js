@@ -4,15 +4,16 @@ const allowMultipleGroupsInput = document.querySelector("#allowMultipleGroups");
 const hideWarmTabsInput = document.querySelector("#hideWarmTabs");
 const muteWarmTabsInput = document.querySelector("#muteWarmTabs");
 const saveButton = document.querySelector("#save");
-const refreshButton = document.querySelector("#refresh");
 const shortcutSettingsButton = document.querySelector("#shortcutSettings");
 const messageElement = document.querySelector("#message");
-const activePoolLimitElement = document.querySelector("#activePoolLimit");
 const editorHost = document.querySelector("#editorHost");
 const activeGroupsHost = document.querySelector("#activeGroupsHost");
 const activePoolsEmpty = document.querySelector("#activePoolsEmpty");
 const groupListElement = document.querySelector("#groupList");
 const createGroupButton = document.querySelector("#createGroup");
+const groupGraphElement = document.querySelector("#groupGraph");
+const groupGraphEmpty = document.querySelector("#groupGraphEmpty");
+const resetGroupGraphButton = document.querySelector("#resetGroupGraph");
 const importConfigButton = document.querySelector("#importConfig");
 const exportConfigButton = document.querySelector("#exportConfig");
 const importFileInput = document.querySelector("#importFile");
@@ -34,7 +35,7 @@ let currentConfig = null;
 let editingGroupId = null;
 let rowsElement = null;
 let dirty = false;
-let refreshShortcutsOnFocus = false;
+let reloadShortcutsOnFocus = false;
 let shortcutAssignmentTargets = [];
 let draggedPoolRow = null;
 let draggedPoolOrder = "";
@@ -45,7 +46,13 @@ let draggedActiveGroupOrder = "";
 let draftCompatibilityIssue = null;
 let compatibilityMessage = "";
 
-activePoolLimitElement.textContent = String(WTP.MAX_POOLS);
+const GRAPH_LAYOUT_KEY = "warm-tab-pool:group-graph-layout:v1";
+const GRAPH_WIDTH = 960;
+const GRAPH_HEIGHT = 420;
+const GRAPH_PADDING = 46;
+const SVG_NS = "http://www.w3.org/2000/svg";
+let graphDefaultOrderSignature = "";
+let graphDefaultOrder = [];
 
 function showAppDialog({
   title,
@@ -199,8 +206,12 @@ function groupWarmTabCount(group) {
   );
 }
 
+function countLabel(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function groupSummary(group) {
-  return `${group.pools.length} pools · ${groupWarmTabCount(group)} warm tabs`;
+  return `${countLabel(group.pools.length, "pool")} · ${countLabel(groupWarmTabCount(group), "warm tab")}`;
 }
 
 function activePoolCountExcluding(groupId) {
@@ -264,13 +275,27 @@ function createPoolTable({ editable = false } = {}) {
   const table = document.createElement("table");
   if (!editable) {
     table.className = "readonly-table";
+    const colgroup = document.createElement("colgroup");
+    for (const className of [
+      "readonly-slot-col",
+      "readonly-on-col",
+      "readonly-name-col",
+      "readonly-url-col",
+      "readonly-size-col",
+      "readonly-shortcut-col",
+    ]) {
+      const col = document.createElement("col");
+      col.className = className;
+      colgroup.append(col);
+    }
+    table.append(colgroup);
   }
   const head = document.createElement("thead");
   const headerRow = document.createElement("tr");
 
   const headers = editable
     ? ["", "On", "Slot", "Name", "URL", "Size", "Shortcut", "Actions"]
-    : ["Active slot", "On", "Name", "URL", "Size", "Shortcut"];
+    : ["Slot", "On", "Name", "URL", "Size", "Shortcut"];
   for (const [index, text] of headers.entries()) {
     const th = document.createElement("th");
     th.textContent = text;
@@ -601,6 +626,7 @@ function renderEditableRows(group, body) {
       markDirty();
       updateCompatibilityValidation();
       updateMergeButtonStates();
+      renderGroupGraph();
     });
 
     const deleteButton = document.createElement("button");
@@ -614,6 +640,7 @@ function renderEditableRows(group, body) {
       updateEditorFooter();
       updateCompatibilityValidation();
       updateMergeButtonStates();
+      renderGroupGraph();
     });
 
     actions.append(clearButton, deleteButton);
@@ -808,11 +835,22 @@ function renderReadonlyActiveGroup(group, assignmentByPoolId) {
 
   const actions = document.createElement("div");
   actions.className = "group-panel-actions";
+  const unload = document.createElement("button");
+  unload.type = "button";
+  unload.className = "group-unload-button";
+  unload.textContent = "Unload";
+  unload.title = `Unload ${group.name}`;
+  unload.setAttribute("aria-label", `Unload ${group.name}`);
+  unload.addEventListener("click", () => void changeGroupActive(group.id, false));
+
   const edit = document.createElement("button");
   edit.type = "button";
-  edit.textContent = "Edit";
+  edit.className = "group-edit-button";
+  edit.textContent = "✎";
+  edit.title = `Edit ${group.name}`;
+  edit.setAttribute("aria-label", `Edit ${group.name}`);
   edit.addEventListener("click", () => selectEditor(group.id));
-  actions.append(edit);
+  actions.append(unload, edit);
   header.append(title, actions);
 
   const bodyWrap = document.createElement("div");
@@ -831,6 +869,7 @@ function renderReadonlyActiveGroup(group, assignmentByPoolId) {
     enabledCell.textContent = pool.enabled ? "✓" : "—";
 
     const nameCell = document.createElement("td");
+    nameCell.className = "readonly-name";
     nameCell.textContent = pool.name;
 
     const urlCell = document.createElement("td");
@@ -923,6 +962,8 @@ function renderGroups() {
 
     const actions = document.createElement("div");
     actions.className = "group-actions";
+    const mainActions = document.createElement("div");
+    mainActions.className = "group-actions-main";
 
     if (editingGroupId && group.id !== editingGroupId) {
       const mergeWrap = document.createElement("span");
@@ -935,7 +976,12 @@ function renderGroups() {
       merge.setAttribute("aria-label", `Merge ${group.name} into the group being edited`);
       merge.addEventListener("click", () => void mergeGroupIntoEdited(group.id));
       mergeWrap.append(merge);
-      actions.append(mergeWrap);
+      mainActions.append(mergeWrap);
+    } else {
+      const mergePlaceholder = document.createElement("span");
+      mergePlaceholder.className = "merge-action-placeholder";
+      mergePlaceholder.setAttribute("aria-hidden", "true");
+      mainActions.append(mergePlaceholder);
     }
 
     const rename = document.createElement("button");
@@ -948,34 +994,589 @@ function renderGroups() {
     clone.textContent = "Clone";
     clone.addEventListener("click", () => void cloneGroup(group.id));
 
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.textContent = group.id === editingGroupId ? "Editing" : "Edit";
-    edit.disabled = group.id === editingGroupId;
-    edit.addEventListener("click", () => selectEditor(group.id));
-
-    const active = isGroupActive(group.id);
-    const load = document.createElement("button");
-    load.type = "button";
-    load.textContent = active ? "Unload" : "Load";
-    load.addEventListener("click", () => void changeGroupActive(group.id, !active));
-
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "Delete";
     remove.addEventListener("click", () => void deleteGroup(group.id));
 
-    actions.append(rename, clone, edit, load, remove);
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "group-edit-button";
+    edit.textContent = "✎";
+    edit.disabled = group.id === editingGroupId;
+    edit.title = group.id === editingGroupId ? "This group is being edited" : `Edit ${group.name}`;
+    edit.setAttribute("aria-label", edit.title);
+    edit.addEventListener("click", () => selectEditor(group.id));
+
+    mainActions.append(rename, clone, remove, edit);
+
+    const divider = document.createElement("span");
+    divider.className = "group-actions-divider";
+    divider.setAttribute("aria-hidden", "true");
+
+    const stateAction = document.createElement("div");
+    stateAction.className = "group-state-action";
+    const active = isGroupActive(group.id);
+    const load = document.createElement("button");
+    load.type = "button";
+    load.textContent = active ? "Unload" : "Load";
+    load.addEventListener("click", () => void changeGroupActive(group.id, !active));
+    stateAction.append(load);
+
+    actions.append(mainActions, divider, stateAction);
     row.append(dragWrap, nameWrap, summary, actions);
     groupListElement.append(row);
   }
   updateMergeButtonStates();
 }
 
+function createSvgElement(name) {
+  return document.createElementNS(SVG_NS, name);
+}
+
+function graphStoredPositions() {
+  try {
+    const raw = localStorage.getItem(GRAPH_LAYOUT_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    return parsed.positions && typeof parsed.positions === "object"
+      ? parsed.positions
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveGraphPosition(groupId, position) {
+  try {
+    const positions = graphStoredPositions();
+    positions[groupId] = [position.x, position.y];
+    localStorage.setItem(GRAPH_LAYOUT_KEY, JSON.stringify({ version: 1, positions }));
+  } catch {
+    // A custom layout is a convenience only; graph interaction still works.
+  }
+}
+
+function clearStoredGraphPositions() {
+  try {
+    localStorage.removeItem(GRAPH_LAYOUT_KEY);
+  } catch {
+    // Ignore storage failures; the graph can still use its computed layout.
+  }
+}
+
+function configForGraph() {
+  return previewConfigWithEditor() ?? currentConfig;
+}
+
+function graphPotentialPairIssue(config, firstGroupId, secondGroupId) {
+  const draft = structuredClone(config);
+  draft.allowMultipleGroups = true;
+  draft.activeGroupIds = [firstGroupId, secondGroupId];
+  return WTP.activeConfigurationIssue(WTP.normalizeConfig(draft));
+}
+
+function graphCurrentPairIssue(config, firstGroupId, secondGroupId) {
+  if (!config.allowMultipleGroups) {
+    return {
+      code: "multiple-groups-disabled",
+      message: "Multiple-group mode is disabled.",
+    };
+  }
+  const draft = structuredClone(config);
+  draft.activeGroupIds = [...new Set([
+    ...config.activeGroupIds,
+    firstGroupId,
+    secondGroupId,
+  ])];
+  return WTP.activeConfigurationIssue(WTP.normalizeConfig(draft));
+}
+
+function graphRelations(config) {
+  const activeIds = new Set(config.activeGroupIds);
+  const edges = [];
+  for (let firstIndex = 0; firstIndex < config.poolGroups.length; firstIndex += 1) {
+    for (let secondIndex = firstIndex + 1; secondIndex < config.poolGroups.length; secondIndex += 1) {
+      const first = config.poolGroups[firstIndex];
+      const second = config.poolGroups[secondIndex];
+      const active = activeIds.has(first.id) && activeIds.has(second.id);
+      const potentialIssue = graphPotentialPairIssue(config, first.id, second.id);
+      const potential = !potentialIssue;
+      const currentIssue = potential
+        ? graphCurrentPairIssue(config, first.id, second.id)
+        : potentialIssue;
+      const current = potential && !currentIssue;
+      if (!potential && !active) {
+        continue;
+      }
+      edges.push({
+        firstId: first.id,
+        secondId: second.id,
+        active,
+        current,
+        potential,
+      });
+    }
+  }
+  return edges;
+}
+
+function circularEdgeCrosses(first, second, positionsById) {
+  const a = positionsById.get(first.firstId);
+  const b = positionsById.get(first.secondId);
+  const c = positionsById.get(second.firstId);
+  const d = positionsById.get(second.secondId);
+  if ([a, b, c, d].some((value) => value === undefined)) {
+    return false;
+  }
+  if (a === c || a === d || b === c || b === d) {
+    return false;
+  }
+  const between = (value, start, end) => {
+    if (start < end) {
+      return value > start && value < end;
+    }
+    return value > start || value < end;
+  };
+  return between(c, a, b) !== between(d, a, b);
+}
+
+function circularCrossingCount(order, edges) {
+  const positionsById = new Map(order.map((id, index) => [id, index]));
+  let crossings = 0;
+  for (let firstIndex = 0; firstIndex < edges.length; firstIndex += 1) {
+    for (let secondIndex = firstIndex + 1; secondIndex < edges.length; secondIndex += 1) {
+      if (circularEdgeCrosses(edges[firstIndex], edges[secondIndex], positionsById)) {
+        crossings += 1;
+      }
+    }
+  }
+  return crossings;
+}
+
+function exactCircularOrder(groupIds, edges) {
+  if (groupIds.length <= 3 || edges.length <= 1) {
+    return [...groupIds];
+  }
+  const first = groupIds[0];
+  const remaining = groupIds.slice(1);
+  let best = [...groupIds];
+  let bestCrossings = circularCrossingCount(best, edges);
+  const working = [];
+  const used = new Array(remaining.length).fill(false);
+
+  const visit = () => {
+    if (working.length === remaining.length) {
+      const candidate = [first, ...working];
+      const crossings = circularCrossingCount(candidate, edges);
+      if (crossings < bestCrossings) {
+        best = [...candidate];
+        bestCrossings = crossings;
+      }
+      return;
+    }
+    for (let index = 0; index < remaining.length; index += 1) {
+      if (used[index]) {
+        continue;
+      }
+      used[index] = true;
+      working.push(remaining[index]);
+      visit();
+      working.pop();
+      used[index] = false;
+    }
+  };
+  visit();
+  return best;
+}
+
+function heuristicCircularOrder(groupIds, edges) {
+  const neighbors = new Map(groupIds.map((id) => [id, new Set()]));
+  for (const edge of edges) {
+    neighbors.get(edge.firstId)?.add(edge.secondId);
+    neighbors.get(edge.secondId)?.add(edge.firstId);
+  }
+  const unplaced = new Set(groupIds);
+  const start = [...groupIds].sort((first, second) => (
+    (neighbors.get(second)?.size ?? 0) - (neighbors.get(first)?.size ?? 0)
+  ))[0];
+  const order = [];
+  if (start) {
+    order.push(start);
+    unplaced.delete(start);
+  }
+  while (unplaced.size > 0) {
+    let bestId = null;
+    let bestScore = -1;
+    for (const id of unplaced) {
+      const score = order.reduce(
+        (total, placedId) => total + (neighbors.get(id)?.has(placedId) ? 1 : 0),
+        0,
+      );
+      if (score > bestScore) {
+        bestId = id;
+        bestScore = score;
+      }
+    }
+    order.push(bestId);
+    unplaced.delete(bestId);
+  }
+  return order;
+}
+
+function improveCircularOrder(initialOrder, edges) {
+  const order = [...initialOrder];
+  if (order.length <= 3 || edges.length <= 1) {
+    return order;
+  }
+  let bestCrossings = circularCrossingCount(order, edges);
+  const movable = order.length - 1;
+  const attempts = Math.min(96, movable * movable * 2);
+  for (let step = 0; step < attempts && bestCrossings > 0; step += 1) {
+    let firstIndex = 1 + ((step * 7 + 1) % movable);
+    let secondIndex = 1 + ((step * 13 + 3) % movable);
+    if (firstIndex === secondIndex) {
+      secondIndex = 1 + (secondIndex % movable);
+    }
+    if (firstIndex === secondIndex) {
+      continue;
+    }
+    [order[firstIndex], order[secondIndex]] = [order[secondIndex], order[firstIndex]];
+    const crossings = circularCrossingCount(order, edges);
+    if (crossings <= bestCrossings) {
+      bestCrossings = crossings;
+    } else {
+      [order[firstIndex], order[secondIndex]] = [order[secondIndex], order[firstIndex]];
+    }
+  }
+  return order;
+}
+
+function defaultGraphOrder(groupIds, edges) {
+  const edgeSignature = edges
+    .map((edge) => JSON.stringify([edge.firstId, edge.secondId]))
+    .sort();
+  const signature = JSON.stringify([groupIds, edgeSignature]);
+  if (signature === graphDefaultOrderSignature) {
+    return [...graphDefaultOrder];
+  }
+  const order = groupIds.length <= 8
+    ? exactCircularOrder(groupIds, edges)
+    : improveCircularOrder(heuristicCircularOrder(groupIds, edges), edges);
+  graphDefaultOrderSignature = signature;
+  graphDefaultOrder = [...order];
+  return order;
+}
+
+function defaultGraphPositions(groups, edges) {
+  const ids = groups.map((group) => group.id);
+  if (ids.length === 0) {
+    return new Map();
+  }
+  if (ids.length === 1) {
+    return new Map([[ids[0], { x: GRAPH_WIDTH / 2, y: GRAPH_HEIGHT / 2 }]]);
+  }
+
+  const structuralEdges = edges.filter((edge) => edge.potential);
+  const order = defaultGraphOrder(ids, structuralEdges);
+  const centerX = GRAPH_WIDTH / 2;
+  const centerY = GRAPH_HEIGHT / 2;
+  const radiusX = GRAPH_WIDTH / 2 - GRAPH_PADDING;
+  const radiusY = GRAPH_HEIGHT / 2 - GRAPH_PADDING;
+  const result = new Map();
+
+  if (order.length === 2) {
+    result.set(order[0], { x: centerX - radiusX * 0.72, y: centerY });
+    result.set(order[1], { x: centerX + radiusX * 0.72, y: centerY });
+    return result;
+  }
+
+  // Sample the ellipse perimeter and place nodes at equal arc-length intervals.
+  // This keeps the graph spread across the available width without clustering
+  // nodes near the ends of the ellipse.
+  const samples = 720;
+  const perimeter = [{ angle: 0, distance: 0 }];
+  let totalDistance = 0;
+  let previous = { x: centerX + radiusX, y: centerY };
+  for (let index = 1; index <= samples; index += 1) {
+    const angle = (2 * Math.PI * index) / samples;
+    const next = {
+      x: centerX + radiusX * Math.cos(angle),
+      y: centerY + radiusY * Math.sin(angle),
+    };
+    totalDistance += Math.hypot(next.x - previous.x, next.y - previous.y);
+    perimeter.push({ angle, distance: totalDistance });
+    previous = next;
+  }
+
+  for (const [index, id] of order.entries()) {
+    const targetDistance = totalDistance * index / order.length;
+    let upperIndex = 1;
+    while (
+      upperIndex < perimeter.length
+      && perimeter[upperIndex].distance < targetDistance
+    ) {
+      upperIndex += 1;
+    }
+    const lower = perimeter[Math.max(0, upperIndex - 1)];
+    const upper = perimeter[Math.min(perimeter.length - 1, upperIndex)];
+    const span = upper.distance - lower.distance;
+    const ratio = span > 0 ? (targetDistance - lower.distance) / span : 0;
+    const angle = lower.angle + (upper.angle - lower.angle) * ratio;
+    result.set(id, {
+      x: centerX + radiusX * Math.cos(angle),
+      y: centerY + radiusY * Math.sin(angle),
+    });
+  }
+  return result;
+}
+
+function graphNodeRadius(groupCount) {
+  if (groupCount <= 8) {
+    return 32;
+  }
+  if (groupCount <= 14) {
+    return 24;
+  }
+  return 17;
+}
+
+function graphNodeLabel(name, radius) {
+  const maxCharacters = Math.max(2, Math.floor(radius / 3));
+  const value = String(name ?? "");
+  if (value.length <= maxCharacters) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(1, maxCharacters - 1))}…`;
+}
+
+function graphPointerPosition(svg, event) {
+  const point = svg.createSVGPoint();
+  point.x = event.clientX;
+  point.y = event.clientY;
+  const matrix = svg.getScreenCTM();
+  if (!matrix) {
+    return { x: GRAPH_WIDTH / 2, y: GRAPH_HEIGHT / 2 };
+  }
+  const transformed = point.matrixTransform(matrix.inverse());
+  return { x: transformed.x, y: transformed.y };
+}
+
+function renderGroupGraph() {
+  groupGraphElement.replaceChildren();
+  const config = configForGraph();
+  if (!config || config.poolGroups.length === 0) {
+    groupGraphElement.hidden = true;
+    groupGraphEmpty.hidden = false;
+    resetGroupGraphButton.disabled = true;
+    return;
+  }
+
+  groupGraphElement.hidden = false;
+  groupGraphEmpty.hidden = true;
+  resetGroupGraphButton.disabled = false;
+
+  const edges = graphRelations(config);
+  const defaults = defaultGraphPositions(config.poolGroups, edges);
+  const stored = graphStoredPositions();
+  const radius = graphNodeRadius(config.poolGroups.length);
+  const positions = new Map();
+  for (const group of config.poolGroups) {
+    const candidate = stored[group.id];
+    const fallback = defaults.get(group.id);
+    const x = Array.isArray(candidate) && Number.isFinite(Number(candidate[0]))
+      ? Number(candidate[0])
+      : fallback.x;
+    const y = Array.isArray(candidate) && Number.isFinite(Number(candidate[1]))
+      ? Number(candidate[1])
+      : fallback.y;
+    positions.set(group.id, {
+      x: Math.min(GRAPH_WIDTH - radius - 8, Math.max(radius + 8, x)),
+      y: Math.min(GRAPH_HEIGHT - radius - 8, Math.max(radius + 8, y)),
+    });
+  }
+
+  const svg = createSvgElement("svg");
+  svg.setAttribute("viewBox", `0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`);
+  svg.setAttribute("aria-label", "Pool group compatibility graph");
+  const edgeLayer = createSvgElement("g");
+  const nodeLayer = createSvgElement("g");
+  const renderedEdges = [];
+
+  for (const edge of edges) {
+    const firstPosition = positions.get(edge.firstId);
+    const secondPosition = positions.get(edge.secondId);
+    if (!firstPosition || !secondPosition) {
+      continue;
+    }
+    const line = createSvgElement("line");
+    line.classList.add("graph-edge");
+    if (edge.active) {
+      line.classList.add("active");
+    } else if (edge.current) {
+      line.classList.add("current");
+    } else {
+      line.classList.add("potential");
+    }
+    line.setAttribute("x1", String(firstPosition.x));
+    line.setAttribute("y1", String(firstPosition.y));
+    line.setAttribute("x2", String(secondPosition.x));
+    line.setAttribute("y2", String(secondPosition.y));
+    edgeLayer.append(line);
+    renderedEdges.push({ edge, line });
+  }
+
+  const activeIds = new Set(config.activeGroupIds);
+  for (const group of config.poolGroups) {
+    const node = createSvgElement("g");
+    node.classList.add("graph-node");
+    if (activeIds.has(group.id)) {
+      node.classList.add("active");
+    }
+    node.dataset.groupId = group.id;
+    node.setAttribute("role", "button");
+    node.setAttribute("tabindex", "0");
+
+    const activationIssue = activeIds.has(group.id)
+      ? null
+      : WTP.groupActivationIssue(config, group.id);
+    const actionText = activeIds.has(group.id)
+      ? `Unload “${group.name}”`
+      : activationIssue
+        ? `Load “${group.name}”. ${activationIssue.message}`
+        : `Load “${group.name}”`;
+    node.setAttribute("aria-label", actionText);
+
+    const title = createSvgElement("title");
+    title.textContent = activeIds.has(group.id)
+      ? `${group.name} — loaded. Click to unload; drag to reposition.`
+      : activationIssue
+        ? `${group.name} — ${activationIssue.message} Click to attempt loading; drag to reposition.`
+        : `${group.name} — click to load; drag to reposition.`;
+
+    const circle = createSvgElement("circle");
+    circle.setAttribute("r", String(radius));
+    const label = createSvgElement("text");
+    label.textContent = graphNodeLabel(group.name, radius);
+    label.style.fontSize = `${Math.max(9, Math.min(13, radius * 0.42))}px`;
+    node.append(title, circle, label);
+
+    const initialPosition = positions.get(group.id);
+    node.setAttribute("transform", `translate(${initialPosition.x} ${initialPosition.y})`);
+
+    let pointerId = null;
+    let startPointer = null;
+    let startPosition = null;
+    let moved = false;
+
+    const updatePosition = (position) => {
+      const next = {
+        x: Math.min(GRAPH_WIDTH - radius - 8, Math.max(radius + 8, position.x)),
+        y: Math.min(GRAPH_HEIGHT - radius - 8, Math.max(radius + 8, position.y)),
+      };
+      positions.set(group.id, next);
+      node.setAttribute("transform", `translate(${next.x} ${next.y})`);
+      for (const rendered of renderedEdges) {
+        if (rendered.edge.firstId === group.id) {
+          rendered.line.setAttribute("x1", String(next.x));
+          rendered.line.setAttribute("y1", String(next.y));
+        }
+        if (rendered.edge.secondId === group.id) {
+          rendered.line.setAttribute("x2", String(next.x));
+          rendered.line.setAttribute("y2", String(next.y));
+        }
+      }
+    };
+
+    node.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      pointerId = event.pointerId;
+      startPointer = graphPointerPosition(svg, event);
+      startPosition = { ...positions.get(group.id) };
+      moved = false;
+      node.classList.add("dragging");
+      node.setPointerCapture(pointerId);
+      event.preventDefault();
+    });
+
+    node.addEventListener("pointermove", (event) => {
+      if (pointerId !== event.pointerId || !startPointer || !startPosition) {
+        return;
+      }
+      const pointer = graphPointerPosition(svg, event);
+      const dx = pointer.x - startPointer.x;
+      const dy = pointer.y - startPointer.y;
+      if (Math.hypot(dx, dy) > 4) {
+        moved = true;
+      }
+      if (moved) {
+        updatePosition({ x: startPosition.x + dx, y: startPosition.y + dy });
+      }
+    });
+
+    const finishPointer = (event) => {
+      if (pointerId !== event.pointerId) {
+        return;
+      }
+      const wasMoved = moved;
+      const finalPosition = positions.get(group.id);
+      try {
+        node.releasePointerCapture(pointerId);
+      } catch {
+        // Capture may already have been released by the browser.
+      }
+      pointerId = null;
+      startPointer = null;
+      startPosition = null;
+      moved = false;
+      node.classList.remove("dragging");
+      if (wasMoved) {
+        saveGraphPosition(group.id, finalPosition);
+      } else {
+        void changeGroupActive(group.id, !activeIds.has(group.id));
+      }
+    };
+    node.addEventListener("pointerup", finishPointer);
+    node.addEventListener("pointercancel", (event) => {
+      if (pointerId !== event.pointerId) {
+        return;
+      }
+      if (moved && startPosition) {
+        updatePosition(startPosition);
+      }
+      pointerId = null;
+      startPointer = null;
+      startPosition = null;
+      moved = false;
+      node.classList.remove("dragging");
+    });
+    node.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      void changeGroupActive(group.id, !activeIds.has(group.id));
+    });
+
+    nodeLayer.append(node);
+  }
+
+  svg.append(edgeLayer, nodeLayer);
+  groupGraphElement.append(svg);
+}
+
 function renderAll() {
   renderEditor();
   renderActiveGroups();
   renderGroups();
+  renderGroupGraph();
   updateCompatibilityValidation();
 }
 
@@ -1042,7 +1643,10 @@ async function changeGroupActive(groupId, active) {
   setMessage(active ? "Loading pool group…" : "Unloading pool group…");
   let before = null;
   try {
-    syncValidDraft();
+    // Apply the editor fields first, then validate the resulting active set.
+    // This lets an unload (or single-group replacement) resolve a draft
+    // compatibility conflict instead of being blocked by the pre-change set.
+    syncEditorIntoDraft();
     before = structuredClone(currentConfig);
     if (active) {
       if (currentConfig.allowMultipleGroups) {
@@ -1385,6 +1989,7 @@ function applyRemoteConfiguration(rawConfig, { preserveDraft = dirty } = {}) {
   );
   renderActiveGroups();
   renderGroups();
+  renderGroupGraph();
   updateEditorFooter();
   updateCompatibilityValidation();
 }
@@ -1404,7 +2009,7 @@ async function loadPage() {
     renderAll();
     setDirty(shortcutsChanged);
     if (shortcutsChanged) {
-      setMessage("Firefox shortcut changes detected. Save to store them in the active groups.");
+      setMessage("Browser shortcut changes detected. Save to store them in the active groups.");
     }
   } catch (error) {
     setMessage(error.message, { error: true });
@@ -1420,23 +2025,6 @@ saveButton.addEventListener("click", async () => {
   } catch (error) {
     setMessage(error.message, { error: true });
     setDirty(true);
-  }
-});
-
-refreshButton.addEventListener("click", async () => {
-  refreshButton.disabled = true;
-  setMessage("Reconciling saved active pools…");
-  try {
-    await browser.runtime.sendMessage({ type: "reconcile" });
-    const saved = await WTP.loadConfig();
-    applyRemoteConfiguration(saved);
-    setMessage(dirty
-      ? "Warm-tab state reconciled; live group state refreshed and unsaved edits preserved."
-      : "Warm-tab state reconciled and settings refreshed.");
-  } catch (error) {
-    setMessage(error.message, { error: true });
-  } finally {
-    refreshButton.disabled = false;
   }
 });
 
@@ -1458,7 +2046,7 @@ shortcutSettingsButton.addEventListener("click", async () => {
         poolId: assignment.pool.id,
       }),
     );
-    refreshShortcutsOnFocus = true;
+    reloadShortcutsOnFocus = true;
     await browser.runtime.sendMessage({ type: "openShortcutSettings" });
   } catch (error) {
     setMessage(error.message, { error: true });
@@ -1466,6 +2054,12 @@ shortcutSettingsButton.addEventListener("click", async () => {
 });
 
 createGroupButton.addEventListener("click", () => void createGroup());
+
+resetGroupGraphButton.addEventListener("click", () => {
+  clearStoredGraphPositions();
+  renderGroupGraph();
+  setMessage("Restored the default group graph arrangement.");
+});
 
 exportConfigButton.addEventListener("click", () => {
   try {
@@ -1562,7 +2156,7 @@ allowMultipleGroupsInput.addEventListener("change", () => {
     syncEditorIntoDraft();
     if (!allowMultipleGroupsInput.checked && currentConfig.activeGroupIds.length > 1) {
       currentConfig.activeGroupIds = [currentConfig.activeGroupIds[0]];
-      setMessage("Multiple-group mode disabled in the draft; saving will keep only the first active group loaded.");
+      setMessage("Multiple-group mode is disabled in the draft; saving will unload all but the first active group.");
     }
     markDirty();
     renderAll();
@@ -1576,6 +2170,7 @@ editorHost.addEventListener("input", (event) => {
     markDirty();
     updateCompatibilityValidation();
     updateMergeButtonStates();
+    renderGroupGraph();
   }
 });
 editorHost.addEventListener("change", (event) => {
@@ -1583,6 +2178,7 @@ editorHost.addEventListener("change", (event) => {
     markDirty();
     updateCompatibilityValidation();
     updateMergeButtonStates();
+    renderGroupGraph();
   }
 });
 
@@ -1758,10 +2354,10 @@ groupListElement.addEventListener("dragend", async () => {
 });
 
 window.addEventListener("focus", async () => {
-  if (!currentConfig || !refreshShortcutsOnFocus) {
+  if (!currentConfig || !reloadShortcutsOnFocus) {
     return;
   }
-  refreshShortcutsOnFocus = false;
+  reloadShortcutsOnFocus = false;
   try {
     const shortcuts = await shortcutMap();
     const changed = applyShortcutMapToTargets(shortcuts, shortcutAssignmentTargets);
@@ -1769,10 +2365,10 @@ window.addEventListener("focus", async () => {
     if (changed) {
       markDirty();
       renderAll();
-      setMessage("Firefox shortcut changes detected. Save to store them in the active groups.");
+      setMessage("Browser shortcut changes detected. Save to store them in the active groups.");
     }
   } catch (error) {
-    setMessage(`Could not refresh shortcuts: ${error.message}`, { error: true });
+    setMessage(`Could not reload browser shortcuts: ${error.message}`, { error: true });
   }
 });
 

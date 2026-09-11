@@ -49,11 +49,13 @@ The top **Settings** section contains:
 
 The **Active pools** section shows the current live layout. With no group being edited it shows all active groups. Editing a group opens a visually distinct editor at the top of the section. If that group is active, its editor represents its active block and the group is not duplicated below it. Other active groups remain visible beneath it.
 
-Click **Done** in the local editor to keep the edits in the page's current draft and exit editing mode. **Done** does not replace the page-level **Save** button: **Save** persists the draft, reapplies command slots, and reconciles warm tabs.
+Each read-only active-group header has **Unload** immediately to the left of its pencil edit button, so a group can be removed from the active set without returning to Pool groups.
 
-The shortcut instruction is intentionally explicit: shortcuts are typed as text into the field; pressing the actual shortcut while the field is focused is not the editing mechanism.
+Click **Done** in the local editor to keep the edits in the page's current draft and exit editing mode. **Done** does not replace the page-level **Save** button: **Save** persists the draft, reapplies command slots, and reconciles warm tabs. When Save is available, it uses the same accent color as loaded nodes in the Group graph.
 
-The **Firefox shortcut settings** button opens Firefox's Manage Extension Shortcuts page. When focus returns, changes made there are mapped back to the pool identities that owned those command slots when the Firefox page was opened. This prevents an unsaved group reorder from accidentally assigning a changed shortcut to the wrong pool.
+The shortcut instruction shows the accepted text format with examples such as `Ctrl+Shift+1` and `F13`; leaving a field blank means no shortcut.
+
+The **Browser shortcut settings** button opens Firefox's Manage Extension Shortcuts page. When focus returns, changes made there are mapped back to the pool identities that owned those command slots when the Firefox page was opened. This prevents an unsaved group reorder from accidentally assigning a changed shortcut to the wrong pool.
 
 ## Pool groups
 
@@ -63,9 +65,11 @@ Each group row provides:
 
 - **Rename**, which asks for a new name without entering edit mode;
 - **Clone**, which asks for the clone's name, creates an inactive copy, and opens the clone for editing;
-- **Edit**, which opens the group in the Active pools editor without activating it;
-- **Load** or **Unload**, depending on its active state; and
-- **Delete**.
+- **Delete**;
+- a pencil edit button, which opens the group in the Active pools editor without activating it; and
+- a visually separated, fixed-width **Load**/**Unload** button at the far right.
+
+The action columns use fixed widths so the Load/Unload separator stays aligned across group rows even when every group is unloaded.
 
 While a group is being edited, every other group also gets an **↑** merge action. Merging appends the source group's pools to the edited group. The source group is **kept by default**. The merge dialog contains an unchecked **Remove “source” after merging (destructive)** checkbox; selecting it turns the operation into a destructive merge that removes the source group after its pools are appended. The resulting edited group keeps its name. Pool IDs are de-duplicated when necessary.
 
@@ -83,17 +87,30 @@ Group creation, rename, clone, delete, merge, and import confirmation use an in-
 
 Group rows and the popup display two compact counts beside each group name: total pool rows and total configured warm tabs. The warm-tab count is the sum of sizes of enabled pools.
 
+## Group graph
+
+The **Group graph** is a top-level settings-page section alongside **Settings**, **Active pools**, and **Pool groups**. It visualizes activation compatibility:
+
+- loaded groups are highlighted, and an edge between two loaded groups is highlighted as well;
+- a normal solid edge means the two endpoint groups can coexist while keeping the groups that are loaded now;
+- a thinner dotted edge means the two endpoint groups can coexist with each other, but not together with the current loaded subset; and
+- no edge means the pair itself is incompatible because of the 32-pool limit or a shortcut collision.
+
+Clicking a loaded node unloads it. Clicking an unloaded node uses the same activation path as the normal Load button, so it either loads the group or reports the same compatibility error. Graph-initiated changes are committed through normal configuration synchronization, so the Active pools section and popup update automatically; popup/group-button changes likewise update the graph through storage changes.
+
+Nodes are draggable. Their custom positions are kept as local options-page UI state. **To default arrangement** clears those positions and rebuilds an evenly spaced ellipse layout. For up to eight groups, the default circular ordering is exhaustively chosen to minimize crossings among structural compatibility edges; larger graphs use a deterministic adjacency-and-crossing-reduction heuristic before equal-spacing placement.
+
 ## Saving and live-state operations
 
-The page-level **Save** button is disabled when there are no unsaved pool/global-setting changes. Pool edits, settings changes, or detected Firefox shortcut changes enable it. Group-level structural actions (create, clone, rename, delete, merge, and stored-group reorder) are committed immediately so the popup and any other open extension view see the same group list without requiring an extra Save.
+The page-level **Save** button is disabled when there are no unsaved pool/global-setting changes. Pool edits, settings changes, or detected browser-shortcut changes enable it. Group-level structural actions (create, clone, rename, delete, merge, and stored-group reorder) are committed immediately so the popup and any other open extension view see the same group list without requiring an extra Save.
 
 Loading/unloading groups and changing active-group order are also live transitions. Every committed transition is serialized by the background process, validates the full active configuration, updates Firefox command slots, persists the configuration, and reconciles warm tabs. If persistence fails after a shortcut remap, the previous shortcut mapping is restored.
+
+The settings page and popup no longer expose manual refresh/reconciliation buttons. Background reconciliation remains automatic because it is part of the pool lifecycle; UI status updates do not request an extra repair pass.
 
 While an active group is being edited, shortcut/pool-limit compatibility is checked against all other active groups as the draft changes. An incompatible draft is reported immediately, disables Save, and cannot be closed with **Done** or committed until the conflict is resolved.
 
 Leaving or reloading the settings page with unsaved changes invokes Firefox's native `beforeunload` confirmation. Firefox controls the exact wording, but the semantics are preserve the draft by staying or discard it by leaving.
-
-The top-level **↻** action performs a full repair/reconciliation against the saved active groups: stale pooled tabs are removed, discarded pooled tabs are reloaded, hide/mute/non-discardable state is reapplied, excess copies are removed, and missing copies are created.
 
 ## Popup
 
@@ -102,18 +119,21 @@ The popup has a global On/Off switch. Turning the extension off removes unused w
 Below that, every stored group is listed with:
 
 - its name;
-- faded counts for pool rows and configured warm tabs; and
+- faded counts for pool rows and configured warm tabs;
+- an **!** compatibility indicator when the group cannot be loaded together with the current active set; and
 - its own On/Off slider.
 
-With multi-group mode enabled, those sliders independently load and unload groups. With multi-group mode disabled, turning one group on replaces the active group. Attempts that would exceed the active-pool limit or introduce a shortcut collision are rejected and the popup displays the warning.
+The compatibility indicator's tooltip contains the concrete reason. The slider remains interactive: attempting the load still runs the normal activation path and displays the same full error message in the popup.
+
+With multi-group mode enabled, those sliders independently load and unload groups. With multi-group mode disabled, turning one group on replaces the active group. Attempts that would exceed the 32 shortcut slots or introduce a shortcut collision are rejected and the popup displays the exact activation error.
 
 The popup's pool list is grouped by active group. Enabled pools show ready/loading state, the effective Firefox shortcut for their assigned command slot, and **Take**.
 
-The popup shows `N of 32 active pools used`, where `N` counts every pool row in the active groups (disabled rows still consume command slots). Its **↻** button performs the same full reconciliation as the settings-page arrow. Automatic status refreshes remain deliberately cheap and do not run a full reconciliation every 500 ms. Configuration storage changes also trigger an immediate refresh.
+The popup shows `N of 32 shortcut slots used`, where `N` counts every pool row in the active groups (disabled rows still consume command slots). **Settings** is available in the popup header. Pool status is polled cheaply every 500 ms, while configuration storage changes trigger an immediate state update; neither path requests a manual full reconciliation.
 
 ## Configuration schema and migration
 
-Version 1.3.0 uses configuration schema version 4.
+Version 1.4.0 uses configuration schema version 4.
 
 Important schema changes include:
 
@@ -169,7 +189,7 @@ There is no build step and no dependency bundle.
 - `common.js` — configuration schema, migration, active-group allocation, and validation.
 - `background.js` — pool lifecycle plus the serialized configuration transition state machine (validation, command assignment, persistence, reconciliation), and popup state.
 - `popup/` — toolbar popup/status/group toggles.
-- `options/` — settings UI, active-group editor, drag/drop, import/export.
+- `options/` — settings UI, active-group editor, compatibility graph, drag/drop, import/export.
 - `icons/` — extension icon.
 
 Reload changes from `about:debugging` while developing.

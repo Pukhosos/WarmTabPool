@@ -308,6 +308,21 @@
     return null;
   }
 
+  function groupActivationIssue(config, groupId) {
+    const group = groupById(config, groupId);
+    if (!group) {
+      return {
+        code: "missing-group",
+        message: "That pool group no longer exists.",
+      };
+    }
+
+    const activeGroupIds = config.allowMultipleGroups
+      ? [...new Set([...config.activeGroupIds, group.id])]
+      : [group.id];
+    return activeConfigurationIssue({ ...config, activeGroupIds });
+  }
+
   function uniqueMergedPoolId(usedIds, sourceGroupId, preferredId) {
     const preferred = String(preferredId ?? "").trim() || "pool";
     if (!usedIds.has(preferred)) {
@@ -537,6 +552,7 @@
     activeGroups,
     activePoolAssignments,
     activeConfigurationIssue,
+    groupActivationIssue,
     groupMergeIssue,
     mergeGroups,
     assertActiveConfiguration,

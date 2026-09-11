@@ -327,19 +327,7 @@ function snapshotFrom(config, entries) {
   );
 }
 
-async function statusSnapshot({ reconcile = false } = {}) {
-  if (reconcile) {
-    await reconcilePools();
-  }
-  const config = await WTP.loadConfig();
-  const entries = await taggedTabs();
-  return snapshotFrom(config, entries);
-}
-
-async function popupState({ reconcile = false } = {}) {
-  if (reconcile) {
-    await reconcilePools();
-  }
+async function popupState() {
   const config = await WTP.loadConfig();
   const entries = await taggedTabs();
   const activeIds = new Set(config.activeGroupIds);
@@ -350,16 +338,21 @@ async function popupState({ reconcile = false } = {}) {
     maxActivePools: WTP.MAX_POOLS,
     activePoolCount: WTP.activePoolAssignments(config).length,
     activeGroupIds: [...config.activeGroupIds],
-    groups: config.poolGroups.map((group) => ({
-      id: group.id,
-      name: group.name,
-      active: activeIds.has(group.id),
-      poolCount: group.pools.length,
-      warmTabCount: group.pools.reduce(
-        (total, pool) => total + (pool.enabled ? pool.size : 0),
-        0,
-      ),
-    })),
+    groups: config.poolGroups.map((group) => {
+      const active = activeIds.has(group.id);
+      const activationIssue = active ? null : WTP.groupActivationIssue(config, group.id);
+      return {
+        id: group.id,
+        name: group.name,
+        active,
+        loadError: activationIssue?.message ?? "",
+        poolCount: group.pools.length,
+        warmTabCount: group.pools.reduce(
+          (total, pool) => total + (pool.enabled ? pool.size : 0),
+          0,
+        ),
+      };
+    }),
     statuses: snapshotFrom(config, entries),
   };
 }
@@ -688,23 +681,14 @@ browser.runtime.onMessage.addListener((message) => {
     return undefined;
   }
 
-  if (message.type === "getStatus") {
-    return serialized(() => statusSnapshot({ reconcile: Boolean(message.reconcile) }));
-  }
   if (message.type === "getPopupState") {
-    return serialized(() => popupState({ reconcile: Boolean(message.reconcile) }));
+    return serialized(popupState);
   }
   if (message.type === "take") {
     return serialized(() => takeFromPool(Number(message.slot)));
   }
   if (message.type === "warm") {
     return serialized(() => warmBestCandidate(Number(message.slot)));
-  }
-  if (message.type === "reconcile") {
-    return serialized(async () => {
-      await reconcilePools();
-      return popupState();
-    });
   }
   if (message.type === "syncActiveGroups" || message.type === "syncActiveGroup") {
     return serialized(syncActiveGroups);
