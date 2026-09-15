@@ -42,6 +42,7 @@ function shortcutForSlot(slot) {
 function groupSignatureFor(state) {
   return [
     state.allowMultipleGroups,
+    state.warmTabCount,
     interactionInFlight,
     ...state.groups.map((group) => (
       `${group.id}\u0000${group.name}\u0000${group.active}`
@@ -63,7 +64,8 @@ function poolSignatureFor(state) {
 }
 
 function renderGroups(state) {
-  multiModeElement.textContent = `${state.activePoolCount} of ${state.maxActivePools} shortcut slots used`;
+  const warmTabText = `${state.warmTabCount} ${state.warmTabCount === 1 ? "tab" : "tabs"} kept warm`;
+  multiModeElement.textContent = `${state.activePoolCount} of ${state.maxActivePools} shortcut slots used · ${warmTabText}`;
 
   const signature = groupSignatureFor(state);
   if (signature === groupRenderSignature) {

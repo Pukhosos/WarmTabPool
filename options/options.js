@@ -3,13 +3,10 @@
 const allowMultipleGroupsInput = document.querySelector("#allowMultipleGroups");
 const hideWarmTabsInput = document.querySelector("#hideWarmTabs");
 const muteWarmTabsInput = document.querySelector("#muteWarmTabs");
-const saveButton = document.querySelector("#save");
 const shortcutSettingsButton = document.querySelector("#shortcutSettings");
-const messageElement = document.querySelector("#message");
-const editorHost = document.querySelector("#editorHost");
-const activeGroupsHost = document.querySelector("#activeGroupsHost");
-const activePoolsEmpty = document.querySelector("#activePoolsEmpty");
+const errorBanner = document.querySelector("#errorBanner");
 const groupListElement = document.querySelector("#groupList");
+const groupsEmpty = document.querySelector("#groupsEmpty");
 const createGroupButton = document.querySelector("#createGroup");
 const groupGraphElement = document.querySelector("#groupGraph");
 const groupGraphEmpty = document.querySelector("#groupGraphEmpty");
@@ -32,19 +29,19 @@ const appDialogCancel = document.querySelector("#appDialogCancel");
 const appDialogConfirm = document.querySelector("#appDialogConfirm");
 
 let currentConfig = null;
-let editingGroupId = null;
-let rowsElement = null;
+const editingGroupIds = new Set();
+const expandedGroupIds = new Set();
+let rowsByGroupId = new Map();
 let dirty = false;
+let dirtyRevision = 0;
+let autosaveQueue = Promise.resolve();
 let reloadShortcutsOnFocus = false;
 let shortcutAssignmentTargets = [];
-let draggedPoolRow = null;
-let draggedPoolOrder = "";
+let draggedPool = null;
 let draggedGroupRow = null;
 let draggedGroupOrder = "";
-let draggedActiveGroupPanel = null;
-let draggedActiveGroupOrder = "";
 let draftCompatibilityIssue = null;
-let compatibilityMessage = "";
+let compatibilityErrorText = "";
 
 const GRAPH_LAYOUT_KEY = "warm-tab-pool:group-graph-layout:v1";
 const GRAPH_WIDTH = 960;
@@ -137,29 +134,30 @@ appDialogForm.addEventListener("submit", () => {
   appDialog.returnValue = "confirm";
 });
 
-function setMessage(text, { error = false } = {}) {
-  messageElement.textContent = text;
-  messageElement.classList.toggle("error", error);
+function showError(text) {
+  errorBanner.textContent = String(text ?? "");
+  errorBanner.hidden = !errorBanner.textContent;
 }
 
-function updateSaveButton() {
-  saveButton.disabled = !dirty || Boolean(draftCompatibilityIssue);
+function clearError(expectedText = null) {
+  if (expectedText !== null && errorBanner.textContent !== expectedText) {
+    return;
+  }
+  errorBanner.textContent = "";
+  errorBanner.hidden = true;
 }
 
 function setDirty(value) {
   dirty = value;
-  updateSaveButton();
 }
 
 function markDirty() {
-  if (!dirty) {
-    setMessage("");
-  }
-  setDirty(true);
+  dirty = true;
+  dirtyRevision += 1;
 }
 
-function clearInvalid() {
-  editorHost.querySelectorAll(".invalid").forEach(
+function clearInvalid(body) {
+  body?.querySelectorAll(".invalid").forEach(
     (element) => element.classList.remove("invalid"),
   );
 }
@@ -172,15 +170,50 @@ function createInput(type, className, value = "") {
   return input;
 }
 
+function formatShortcutInput(input) {
+  const before = input.value;
+  try {
+    const formatted = WTP.formatShortcut(before);
+    input.value = formatted;
+    input.classList.remove("invalid");
+    return formatted !== before;
+  } catch (error) {
+    input.classList.add("invalid");
+    const row = input.closest("tr");
+    const slot = row?.dataset.slot ?? "?";
+    throw new Error(`Pool ${slot}: invalid shortcut “${before.trim()}” (${error.message}).`);
+  }
+}
+
+function formatShortcutInputs(groupId) {
+  const body = rowsByGroupId.get(groupId);
+  if (!body) {
+    return false;
+  }
+  let changed = false;
+  for (const input of body.querySelectorAll(".pool-shortcut")) {
+    changed = formatShortcutInput(input) || changed;
+  }
+  return changed;
+}
+
+function formatAllShortcutInputs() {
+  let changed = false;
+  for (const groupId of rowsByGroupId.keys()) {
+    changed = formatShortcutInputs(groupId) || changed;
+  }
+  return changed;
+}
+
 function autoGrow(textarea) {
   textarea.style.height = "auto";
   textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
-function makeDragHandle(label) {
+function makeDragHandle(label, kind) {
   const handle = document.createElement("button");
   handle.type = "button";
-  handle.className = "drag-handle";
+  handle.className = `drag-handle ${kind}-drag-handle`;
   handle.textContent = "⋮⋮";
   handle.draggable = true;
   handle.setAttribute("aria-label", label);
@@ -188,11 +221,15 @@ function makeDragHandle(label) {
   return handle;
 }
 
-function editingGroup() {
-  if (!currentConfig || !editingGroupId) {
-    return null;
-  }
-  return WTP.groupById(currentConfig, editingGroupId);
+function isEditing(groupId) {
+  return editingGroupIds.has(groupId);
+}
+
+function singleEditingGroupId() {
+  const ids = [...editingGroupIds].filter(
+    (groupId) => Boolean(currentConfig && WTP.groupById(currentConfig, groupId)),
+  );
+  return ids.length === 1 ? ids[0] : null;
 }
 
 function isGroupActive(groupId) {
@@ -292,7 +329,6 @@ function createPoolTable({ editable = false } = {}) {
   }
   const head = document.createElement("thead");
   const headerRow = document.createElement("tr");
-
   const headers = editable
     ? ["", "On", "Slot", "Name", "URL", "Size", "Shortcut", "Actions"]
     : ["Slot", "On", "Name", "URL", "Size", "Shortcut"];
@@ -310,50 +346,39 @@ function createPoolTable({ editable = false } = {}) {
   }
   head.append(headerRow);
   const body = document.createElement("tbody");
+  if (editable) {
+    body.className = "editable-pool-body";
+  }
   table.append(head, body);
   wrap.append(table);
   return { wrap, body };
 }
 
-function reindexPoolRows() {
-  if (!rowsElement) {
+function reindexPoolRows(body) {
+  if (!body) {
     return;
   }
-  Array.from(rowsElement.querySelectorAll("tr")).forEach((row, index) => {
+  Array.from(body.querySelectorAll("tr")).forEach((row, index) => {
     const slot = index + 1;
     row.dataset.slot = String(slot);
     row.querySelector(".slot").textContent = String(slot);
   });
 }
 
-function poolRowOrder() {
-  if (!rowsElement) {
-    return "";
-  }
-  return Array.from(rowsElement.querySelectorAll("tr"), (row) => row.dataset.dragKey)
-    .join(",");
-}
-
-function collectShortcutArray() {
+function collectShortcutArray(body) {
   const result = WTP.defaultShortcuts();
-  if (!rowsElement) {
-    return result;
-  }
-  Array.from(rowsElement.querySelectorAll("tr")).forEach((row, index) => {
+  Array.from(body.querySelectorAll("tr")).forEach((row, index) => {
     result[index] = row.querySelector(".pool-shortcut").value.trim();
   });
   return result;
 }
 
-function collectPools() {
-  if (!rowsElement) {
-    return [];
-  }
-  clearInvalid();
+function collectPools(body) {
+  clearInvalid(body);
   const pools = [];
   let firstError = null;
 
-  Array.from(rowsElement.querySelectorAll("tr")).forEach((row, index) => {
+  Array.from(body.querySelectorAll("tr")).forEach((row, index) => {
     const slot = index + 1;
     const enabled = row.querySelector(".pool-enabled").checked;
     const nameInput = row.querySelector(".pool-name");
@@ -363,11 +388,7 @@ function collectPools() {
     let url = urlInput.value.trim();
     const size = Number(sizeInput.value);
 
-    if (
-      !Number.isInteger(size)
-      || size < WTP.MIN_POOL_SIZE
-      || size > WTP.MAX_POOL_SIZE
-    ) {
+    if (!Number.isInteger(size) || size < WTP.MIN_POOL_SIZE || size > WTP.MAX_POOL_SIZE) {
       sizeInput.classList.add("invalid");
       firstError ??= `Pool ${slot}: size must be an integer from ${WTP.MIN_POOL_SIZE} to ${WTP.MAX_POOL_SIZE}.`;
     }
@@ -410,7 +431,6 @@ function syncGlobalSettingsIntoDraft() {
   currentConfig.allowMultipleGroups = allowMultipleGroupsInput.checked;
   currentConfig.hideWarmTabs = hideWarmTabsInput.checked;
   currentConfig.muteWarmTabs = muteWarmTabsInput.checked;
-
   if (!currentConfig.allowMultipleGroups && currentConfig.activeGroupIds.length > 1) {
     currentConfig.activeGroupIds = currentConfig.activeGroupIds.length > 0
       ? [currentConfig.activeGroupIds[0]]
@@ -418,105 +438,74 @@ function syncGlobalSettingsIntoDraft() {
   }
 }
 
-function syncEditorIntoDraft() {
+function syncEditorsIntoDraft() {
   if (!currentConfig) {
     throw new Error("Configuration is still loading.");
   }
   syncGlobalSettingsIntoDraft();
-  const group = editingGroup();
-  if (group && rowsElement) {
-    group.pools = collectPools();
-    group.shortcuts = WTP.normalizeShortcuts(collectShortcutArray());
+  for (const [groupId, body] of rowsByGroupId.entries()) {
+    if (!isEditing(groupId)) {
+      continue;
+    }
+    const group = WTP.groupById(currentConfig, groupId);
+    if (!group) {
+      continue;
+    }
+    group.pools = collectPools(body);
+    group.shortcuts = WTP.normalizeShortcuts(collectShortcutArray(body));
   }
   currentConfig = WTP.normalizeConfig(currentConfig);
   return currentConfig;
 }
 
-function previewConfigWithEditor() {
+function previewConfigWithEditors() {
   if (!currentConfig) {
     return null;
   }
-
   const draft = structuredClone(currentConfig);
-  if (editingGroupId && rowsElement) {
-    const group = WTP.groupById(draft, editingGroupId);
-    if (group) {
-      const rows = Array.from(rowsElement.querySelectorAll("tr"));
-      const poolsById = new Map(group.pools.map((pool) => [pool.id, pool]));
-      const shortcuts = WTP.defaultShortcuts();
-      group.pools = rows.map((row, index) => {
-        const previous = poolsById.get(row.dataset.poolId)
-          ?? WTP.defaultPool(index + 1, row.dataset.poolId);
-        shortcuts[index] = row.querySelector(".pool-shortcut").value.trim();
-        return {
-          ...previous,
-          slot: index + 1,
-          name: row.querySelector(".pool-name").value.trim() || `Pool ${index + 1}`,
-        };
-      });
-      group.shortcuts = WTP.normalizeShortcuts(shortcuts);
+  for (const [groupId, body] of rowsByGroupId.entries()) {
+    if (!isEditing(groupId)) {
+      continue;
     }
+    const group = WTP.groupById(draft, groupId);
+    if (!group) {
+      continue;
+    }
+    const previousById = new Map(group.pools.map((pool) => [pool.id, pool]));
+    const shortcuts = WTP.defaultShortcuts();
+    group.pools = Array.from(body.querySelectorAll("tr")).map((row, index) => {
+      const previous = previousById.get(row.dataset.poolId)
+        ?? WTP.defaultPool(index + 1, row.dataset.poolId);
+      shortcuts[index] = row.querySelector(".pool-shortcut").value.trim();
+      return {
+        ...previous,
+        slot: index + 1,
+        enabled: row.querySelector(".pool-enabled").checked,
+        name: row.querySelector(".pool-name").value.trim() || `Pool ${index + 1}`,
+      };
+    });
+    group.shortcuts = WTP.normalizeShortcuts(shortcuts);
   }
   return WTP.normalizeConfig(draft);
 }
 
 function previewDraftIssue() {
-  const draft = previewConfigWithEditor();
+  const draft = previewConfigWithEditors();
   return draft ? WTP.configurationIssue(draft) : null;
-}
-
-function updateMergeButtonStates() {
-  if (!currentConfig || !editingGroupId) {
-    return;
-  }
-  const draft = previewConfigWithEditor();
-  const target = draft ? WTP.groupById(draft, editingGroupId) : null;
-  if (!draft || !target) {
-    return;
-  }
-
-  for (const wrap of groupListElement.querySelectorAll(".merge-action-wrap")) {
-    const sourceGroupId = wrap.dataset.sourceGroupId;
-    const source = WTP.groupById(draft, sourceGroupId);
-    const button = wrap.querySelector(".merge-button");
-    if (!source || !button) {
-      continue;
-    }
-    const nonDestructiveIssue = WTP.groupMergeIssue(
-      draft, source.id, target.id, { destructive: false },
-    );
-    const destructiveIssue = WTP.groupMergeIssue(
-      draft, source.id, target.id, { destructive: true },
-    );
-    const disabled = Boolean(nonDestructiveIssue && destructiveIssue);
-    let title = `Merge “${source.name}” into the edited group “${target.name}”: append its pools and keep “${source.name}” by default.`;
-    if (disabled) {
-      title = nonDestructiveIssue.message === destructiveIssue.message
-        ? nonDestructiveIssue.message
-        : `${nonDestructiveIssue.message} Destructive merge is also unavailable: ${destructiveIssue.message}`;
-    } else if (nonDestructiveIssue) {
-      title = `${nonDestructiveIssue.message} A destructive merge is available by selecting “Remove source group after merging” in the merge dialog.`;
-    }
-    button.disabled = disabled;
-    button.title = title;
-    wrap.title = title;
-    wrap.setAttribute("aria-label", title);
-  }
 }
 
 function updateCompatibilityValidation({ announce = true } = {}) {
   const issue = previewDraftIssue();
   draftCompatibilityIssue = issue;
-  updateSaveButton();
-
   if (issue && announce) {
-    compatibilityMessage = issue.message;
-    setMessage(issue.message, { error: true });
-  } else if (!issue && compatibilityMessage) {
-    if (messageElement.textContent === compatibilityMessage) {
-      setMessage("");
+    if (compatibilityErrorText && compatibilityErrorText !== issue.message) {
+      clearError(compatibilityErrorText);
     }
-    compatibilityMessage = "";
+    compatibilityErrorText = issue.message;
+    showError(issue.message);
+  } else if (!issue && compatibilityErrorText) {
+    clearError(compatibilityErrorText);
+    compatibilityErrorText = "";
   }
   return issue;
 }
@@ -525,17 +514,18 @@ function assertDraftCompatibility(config = currentConfig) {
   const issue = WTP.configurationIssue(config);
   if (issue) {
     draftCompatibilityIssue = issue;
-    compatibilityMessage = issue.message;
-    updateSaveButton();
+    compatibilityErrorText = issue.message;
     throw new Error(issue.message);
   }
   draftCompatibilityIssue = null;
-  compatibilityMessage = "";
-  updateSaveButton();
+  if (compatibilityErrorText) {
+    clearError(compatibilityErrorText);
+    compatibilityErrorText = "";
+  }
 }
 
 function syncValidDraft() {
-  const draft = syncEditorIntoDraft();
+  const draft = syncEditorsIntoDraft();
   assertDraftCompatibility(draft);
   return draft;
 }
@@ -550,16 +540,22 @@ function editorCanAddPool(group) {
   return activePoolCountExcluding(group.id) + group.pools.length < WTP.MAX_POOLS;
 }
 
+function normalizeGroupPoolSlots(group) {
+  group.pools.forEach((pool, index) => {
+    pool.slot = index + 1;
+  });
+}
+
 function renderEditableRows(group, body) {
   for (const pool of group.pools) {
     const row = document.createElement("tr");
     row.dataset.slot = String(pool.slot);
     row.dataset.poolId = pool.id;
-    row.dataset.dragKey = crypto.randomUUID();
+    row.dataset.groupId = group.id;
 
     const dragCell = document.createElement("td");
     dragCell.className = "drag-cell";
-    dragCell.append(makeDragHandle("Drag to reorder this pool"));
+    dragCell.append(makeDragHandle("Drag to reorder or move this pool", "pool"));
 
     const enabledCell = document.createElement("td");
     enabledCell.className = "enabled";
@@ -611,39 +607,20 @@ function renderEditableRows(group, body) {
     const actions = document.createElement("div");
     actions.className = "row-actions";
 
-    const clearButton = document.createElement("button");
-    clearButton.type = "button";
-    clearButton.textContent = "Clear";
-    clearButton.title = "Reset this pool to default values";
-    clearButton.addEventListener("click", () => {
-      const slot = Number(row.dataset.slot);
-      enabled.checked = false;
-      name.value = `Pool ${slot}`;
-      url.value = "";
-      size.value = String(WTP.DEFAULT_POOL_SIZE);
-      shortcut.value = "";
-      autoGrow(url);
-      markDirty();
-      updateCompatibilityValidation();
-      updateMergeButtonStates();
-      renderGroupGraph();
-    });
+    const cloneButton = document.createElement("button");
+    cloneButton.type = "button";
+    cloneButton.className = "pool-clone-button";
+    cloneButton.textContent = "Clone";
+    cloneButton.title = "Clone this pool directly below it";
+    cloneButton.addEventListener("click", () => void clonePool(group.id, row.dataset.poolId));
 
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.textContent = "Delete";
     deleteButton.title = "Remove this pool from the group";
-    deleteButton.addEventListener("click", () => {
-      row.remove();
-      reindexPoolRows();
-      markDirty();
-      updateEditorFooter();
-      updateCompatibilityValidation();
-      updateMergeButtonStates();
-      renderGroupGraph();
-    });
+    deleteButton.addEventListener("click", () => void deletePool(group.id, row.dataset.poolId));
 
-    actions.append(clearButton, deleteButton);
+    actions.append(cloneButton, deleteButton);
     actionsCell.append(actions);
     row.append(
       dragCell,
@@ -660,209 +637,12 @@ function renderEditableRows(group, body) {
   }
 }
 
-function setupPoolDragEvents(body) {
-  body.addEventListener("dragstart", (event) => {
-    const handle = event.target.closest(".drag-handle");
-    if (!handle) {
-      return;
-    }
-    draggedPoolRow = handle.closest("tr");
-    draggedPoolOrder = poolRowOrder();
-    draggedPoolRow.classList.add("dragging");
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", draggedPoolRow.dataset.slot);
-  });
-
-  body.addEventListener("dragover", (event) => {
-    if (!draggedPoolRow) {
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    const target = event.target.closest("tr");
-    if (!target || target === draggedPoolRow) {
-      return;
-    }
-    const rect = target.getBoundingClientRect();
-    const after = event.clientY > rect.top + rect.height / 2;
-    body.insertBefore(draggedPoolRow, after ? target.nextSibling : target);
-  });
-
-  body.addEventListener("drop", (event) => {
-    if (draggedPoolRow) {
-      event.preventDefault();
-    }
-  });
-
-  body.addEventListener("dragend", () => {
-    if (!draggedPoolRow) {
-      return;
-    }
-    draggedPoolRow.classList.remove("dragging");
-    reindexPoolRows();
-    const changed = poolRowOrder() !== draggedPoolOrder;
-    draggedPoolRow = null;
-    draggedPoolOrder = "";
-    if (changed) {
-      markDirty();
-      updateCompatibilityValidation();
-      updateMergeButtonStates();
-    }
-  });
-}
-
-function updateEditorFooter() {
-  const group = editingGroup();
-  const addButton = editorHost.querySelector("#addPool");
-  const note = editorHost.querySelector("#editorLimitNote");
-  if (!group || !addButton || !note || !rowsElement) {
-    return;
-  }
-
-  const currentCount = rowsElement.querySelectorAll("tr").length;
-  const otherActiveCount = activePoolCountExcluding(group.id);
-  const activeCapacityReached = isGroupActive(group.id)
-    && otherActiveCount + currentCount >= WTP.MAX_POOLS;
-  addButton.disabled = currentCount >= WTP.MAX_POOLS || activeCapacityReached;
-
-  if (currentCount >= WTP.MAX_POOLS) {
-    note.textContent = `This group already contains the maximum ${WTP.MAX_POOLS} pools.`;
-  } else if (activeCapacityReached) {
-    note.textContent = `The active groups already occupy all ${WTP.MAX_POOLS} shortcut slots.`;
-  } else {
-    note.textContent = "";
-  }
-}
-
-function renderEditor() {
-  editorHost.replaceChildren();
-  rowsElement = null;
-  const group = editingGroup();
-  if (!group) {
-    return;
-  }
-
-  const panel = document.createElement("section");
-  panel.className = "group-panel editor";
-  const header = document.createElement("div");
-  header.className = "group-panel-header";
-  const title = document.createElement("div");
-  title.className = "group-panel-title";
-  const strong = document.createElement("strong");
-  strong.textContent = group.name;
-  title.append(strong, makeBadge("Editing"));
-  if (isGroupActive(group.id)) {
-    title.append(makeBadge("Active"));
-  }
-
-  const headerActions = document.createElement("div");
-  headerActions.className = "group-panel-actions";
-  const done = document.createElement("button");
-  done.type = "button";
-  done.textContent = "Done";
-  done.title = "Keep these edits in the current draft and exit editing mode";
-  done.addEventListener("click", () => {
-    try {
-      syncValidDraft();
-      editingGroupId = null;
-      renderAll();
-    } catch (error) {
-      setMessage(error.message, { error: true });
-    }
-  });
-  headerActions.append(done);
-  header.append(title, headerActions);
-
-  const bodyWrap = document.createElement("div");
-  bodyWrap.className = "group-panel-body";
-  const { wrap, body } = createPoolTable({ editable: true });
-  rowsElement = body;
-  renderEditableRows(group, body);
-  setupPoolDragEvents(body);
-
-  const footer = document.createElement("div");
-  footer.className = "editor-footer";
-  const add = document.createElement("button");
-  add.id = "addPool";
-  add.className = "plus-button";
-  add.type = "button";
-  add.textContent = "+";
-  add.setAttribute("aria-label", "Add pool");
-  add.title = "Add pool";
-  add.addEventListener("click", () => {
-    try {
-      syncEditorIntoDraft();
-      const edited = editingGroup();
-      if (!edited || !editorCanAddPool(edited)) {
-        updateEditorFooter();
-        return;
-      }
-      const slot = edited.pools.length + 1;
-      edited.pools.push(WTP.defaultPool(slot, uniquePoolId(edited)));
-      renderAll();
-      markDirty();
-    } catch (error) {
-      setMessage(error.message, { error: true });
-    }
-  });
-  const note = document.createElement("p");
-  note.id = "editorLimitNote";
-  note.className = "editor-limit-note";
-  footer.append(add, note);
-
-  bodyWrap.append(wrap, footer);
-  panel.append(header, bodyWrap);
-  editorHost.append(panel);
-  updateEditorFooter();
-}
-
-function renderReadonlyActiveGroup(group, assignmentByPoolId) {
-  const panel = document.createElement("section");
-  panel.className = "group-panel active-group-panel";
-  panel.dataset.groupId = group.id;
-  const header = document.createElement("div");
-  header.className = "group-panel-header";
-  const title = document.createElement("div");
-  title.className = "group-panel-title";
-  const dragHandle = makeDragHandle(`Drag to reorder active group ${group.name}`);
-  dragHandle.classList.add("active-group-drag-handle");
-  const strong = document.createElement("strong");
-  strong.textContent = group.name;
-  const summary = document.createElement("span");
-  summary.className = "active-summary";
-  summary.textContent = groupSummary(group);
-  title.append(dragHandle, strong, makeBadge("Active"), summary);
-
-  const actions = document.createElement("div");
-  actions.className = "group-panel-actions";
-  const unload = document.createElement("button");
-  unload.type = "button";
-  unload.className = "group-unload-button";
-  unload.textContent = "Unload";
-  unload.title = `Unload ${group.name}`;
-  unload.setAttribute("aria-label", `Unload ${group.name}`);
-  unload.addEventListener("click", () => void changeGroupActive(group.id, false));
-
-  const edit = document.createElement("button");
-  edit.type = "button";
-  edit.className = "group-edit-button";
-  edit.textContent = "✎";
-  edit.title = `Edit ${group.name}`;
-  edit.setAttribute("aria-label", `Edit ${group.name}`);
-  edit.addEventListener("click", () => selectEditor(group.id));
-  actions.append(unload, edit);
-  header.append(title, actions);
-
-  const bodyWrap = document.createElement("div");
-  bodyWrap.className = "group-panel-body";
-  const { wrap, body } = createPoolTable();
-
+function renderReadonlyRows(group, body) {
   for (const pool of group.pools) {
-    const assignment = assignmentByPoolId.get(`${group.id}\u0000${pool.id}`);
     const row = document.createElement("tr");
     const slotCell = document.createElement("td");
     slotCell.className = "slot";
-    slotCell.textContent = assignment ? String(assignment.commandSlot) : "—";
+    slotCell.textContent = String(pool.slot);
 
     const enabledCell = document.createElement("td");
     enabledCell.className = "enabled";
@@ -886,73 +666,154 @@ function renderReadonlyActiveGroup(group, assignmentByPoolId) {
     row.append(slotCell, enabledCell, nameCell, urlCell, sizeCell, shortcutCell);
     body.append(row);
   }
-  bodyWrap.append(wrap);
-  panel.append(header, bodyWrap);
-  return panel;
 }
 
-function renderActiveGroups() {
-  activeGroupsHost.replaceChildren();
-  if (!currentConfig) {
-    activePoolsEmpty.hidden = true;
-    return;
-  }
-
-  const assignments = WTP.activePoolAssignments(currentConfig);
-  const assignmentByPoolId = new Map(assignments.map((assignment) => [
-    `${assignment.group.id}\u0000${assignment.pool.id}`,
-    assignment,
-  ]));
-  const activeGroups = WTP.activeGroups(currentConfig);
-
-  for (const group of activeGroups) {
-    if (group.id === editingGroupId) {
+function updateEditorFooter(groupId = null) {
+  const ids = groupId ? [groupId] : [...editingGroupIds];
+  for (const id of ids) {
+    const group = currentConfig ? WTP.groupById(currentConfig, id) : null;
+    const body = rowsByGroupId.get(id);
+    const rowElement = groupListElement.querySelector(`.group-row[data-group-id="${CSS.escape(id)}"]`);
+    const addButton = rowElement?.querySelector(".add-pool-button");
+    const note = rowElement?.querySelector(".editor-limit-note");
+    if (!group || !body || !addButton || !note) {
       continue;
     }
-    activeGroupsHost.append(renderReadonlyActiveGroup(group, assignmentByPoolId));
+    const currentCount = body.querySelectorAll("tr").length;
+    const otherActiveCount = activePoolCountExcluding(group.id);
+    const activeCapacityReached = isGroupActive(group.id)
+      && otherActiveCount + currentCount >= WTP.MAX_POOLS;
+    const capacityReached = currentCount >= WTP.MAX_POOLS || activeCapacityReached;
+    addButton.disabled = capacityReached;
+    rowElement.querySelectorAll(".pool-clone-button").forEach((button) => {
+      button.disabled = capacityReached;
+    });
+    if (currentCount >= WTP.MAX_POOLS) {
+      note.textContent = `This group already contains the maximum ${WTP.MAX_POOLS} pools.`;
+    } else if (activeCapacityReached) {
+      note.textContent = `The active groups already occupy all ${WTP.MAX_POOLS} shortcut slots.`;
+    } else {
+      note.textContent = "";
+    }
   }
-  activePoolsEmpty.hidden = activeGroups.length > 0;
 }
 
-function selectEditor(groupId) {
-  if (!currentConfig || groupId === editingGroupId) {
+function renderExpandedBody(group) {
+  const bodyWrap = document.createElement("div");
+  bodyWrap.className = "group-expanded-body";
+  if (isEditing(group.id)) {
+    const toolbar = document.createElement("div");
+    toolbar.className = "group-editor-toolbar";
+    const done = document.createElement("button");
+    done.type = "button";
+    done.className = "done-button";
+    done.textContent = "Done";
+    done.title = "Validate and save this group, then leave edit mode";
+    done.addEventListener("click", () => void finishEditingGroup(group.id));
+    toolbar.append(done);
+
+    const { wrap, body } = createPoolTable({ editable: true });
+    body.dataset.groupId = group.id;
+    rowsByGroupId.set(group.id, body);
+    renderEditableRows(group, body);
+
+    const footer = document.createElement("div");
+    footer.className = "editor-footer";
+    const add = document.createElement("button");
+    add.className = "plus-button add-pool-button";
+    add.type = "button";
+    add.textContent = "+";
+    add.setAttribute("aria-label", `Add pool to ${group.name}`);
+    add.title = "Add pool";
+    add.addEventListener("click", () => void addPool(group.id));
+    const note = document.createElement("p");
+    note.className = "editor-limit-note";
+    footer.append(add, note);
+    bodyWrap.append(toolbar, wrap, footer);
+  } else {
+    const { wrap, body } = createPoolTable();
+    renderReadonlyRows(group, body);
+    bodyWrap.append(wrap);
+  }
+  return bodyWrap;
+}
+
+function updateMergeButtonStates() {
+  const targetGroupId = singleEditingGroupId();
+  if (!currentConfig || !targetGroupId) {
     return;
   }
-  try {
-    syncValidDraft();
-    if (!WTP.groupById(currentConfig, groupId)) {
-      throw new Error("That pool group no longer exists.");
+  const draft = previewConfigWithEditors();
+  const target = draft ? WTP.groupById(draft, targetGroupId) : null;
+  if (!draft || !target) {
+    return;
+  }
+  for (const wrap of groupListElement.querySelectorAll(".merge-action-wrap")) {
+    const sourceGroupId = wrap.dataset.sourceGroupId;
+    const source = WTP.groupById(draft, sourceGroupId);
+    const button = wrap.querySelector(".merge-button");
+    if (!source || !button) {
+      continue;
     }
-    editingGroupId = groupId;
-    renderAll();
-  } catch (error) {
-    setMessage(error.message, { error: true });
+    const nonDestructiveIssue = WTP.groupMergeIssue(
+      draft, source.id, target.id, { destructive: false },
+    );
+    const destructiveIssue = WTP.groupMergeIssue(
+      draft, source.id, target.id, { destructive: true },
+    );
+    const disabled = Boolean(nonDestructiveIssue && destructiveIssue);
+    let title = `Merge “${source.name}” into the edited group “${target.name}”: append its pools and keep “${source.name}” by default.`;
+    if (disabled) {
+      title = nonDestructiveIssue.message === destructiveIssue.message
+        ? nonDestructiveIssue.message
+        : `${nonDestructiveIssue.message} Destructive merge is also unavailable: ${destructiveIssue.message}`;
+    } else if (nonDestructiveIssue) {
+      title = `${nonDestructiveIssue.message} A destructive merge is available by selecting “Remove source group after merging” in the merge dialog.`;
+    }
+    button.disabled = disabled;
+    button.title = title;
+    wrap.title = title;
+    wrap.setAttribute("aria-label", title);
   }
 }
 
 function renderGroups() {
   groupListElement.replaceChildren();
+  rowsByGroupId = new Map();
   if (!currentConfig) {
+    groupsEmpty.hidden = true;
     return;
   }
 
+  const mergeTargetId = singleEditingGroupId();
+
   for (const group of currentConfig.poolGroups) {
-    const row = document.createElement("div");
+    const row = document.createElement("section");
     row.className = "group-row";
     row.dataset.groupId = group.id;
+    row.classList.toggle("editing", isEditing(group.id));
 
+    const header = document.createElement("div");
+    header.className = "group-row-header";
     const dragWrap = document.createElement("div");
-    dragWrap.append(makeDragHandle("Drag to reorder this group"));
+    dragWrap.append(makeDragHandle(`Drag to reorder group ${group.name}`, "group"));
 
     const nameWrap = document.createElement("div");
     nameWrap.className = "group-name";
-    const name = document.createElement("strong");
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "group-name-button";
     name.textContent = group.name;
+    name.title = expandedGroupIds.has(group.id) ? `Collapse ${group.name}` : `Expand ${group.name}`;
+    name.setAttribute("aria-expanded", String(expandedGroupIds.has(group.id)));
+    name.addEventListener("click", () => void toggleGroupExpanded(group.id));
     nameWrap.append(name);
-    if (isGroupActive(group.id)) {
-      nameWrap.append(makeBadge("Active"));
-    }
-    if (group.id === editingGroupId) {
+
+    const activeBadge = makeBadge("Active");
+    activeBadge.dataset.role = "active-badge";
+    activeBadge.hidden = !isGroupActive(group.id);
+    nameWrap.append(activeBadge);
+    if (isEditing(group.id)) {
       nameWrap.append(makeBadge("Editing"));
     }
 
@@ -965,23 +826,26 @@ function renderGroups() {
     const mainActions = document.createElement("div");
     mainActions.className = "group-actions-main";
 
-    if (editingGroupId && group.id !== editingGroupId) {
-      const mergeWrap = document.createElement("span");
-      mergeWrap.className = "merge-action-wrap";
-      mergeWrap.dataset.sourceGroupId = group.id;
-      const merge = document.createElement("button");
-      merge.type = "button";
-      merge.className = "merge-button";
-      merge.textContent = "↑";
-      merge.setAttribute("aria-label", `Merge ${group.name} into the group being edited`);
-      merge.addEventListener("click", () => void mergeGroupIntoEdited(group.id));
-      mergeWrap.append(merge);
-      mainActions.append(mergeWrap);
-    } else {
-      const mergePlaceholder = document.createElement("span");
-      mergePlaceholder.className = "merge-action-placeholder";
-      mergePlaceholder.setAttribute("aria-hidden", "true");
-      mainActions.append(mergePlaceholder);
+    if (mergeTargetId) {
+      mainActions.classList.add("with-merge");
+      if (group.id !== mergeTargetId) {
+        const mergeWrap = document.createElement("span");
+        mergeWrap.className = "merge-action-wrap";
+        mergeWrap.dataset.sourceGroupId = group.id;
+        const merge = document.createElement("button");
+        merge.type = "button";
+        merge.className = "merge-button";
+        merge.textContent = "↑";
+        merge.setAttribute("aria-label", `Merge ${group.name} into the group being edited`);
+        merge.addEventListener("click", () => void mergeGroupIntoEdited(group.id));
+        mergeWrap.append(merge);
+        mainActions.append(mergeWrap);
+      } else {
+        const placeholder = document.createElement("span");
+        placeholder.className = "merge-action-placeholder";
+        placeholder.setAttribute("aria-hidden", "true");
+        mainActions.append(placeholder);
+      }
     }
 
     const rename = document.createElement("button");
@@ -1002,12 +866,11 @@ function renderGroups() {
     const edit = document.createElement("button");
     edit.type = "button";
     edit.className = "group-edit-button";
-    edit.textContent = "✎";
-    edit.disabled = group.id === editingGroupId;
-    edit.title = group.id === editingGroupId ? "This group is being edited" : `Edit ${group.name}`;
+    edit.textContent = isEditing(group.id) ? "Edited" : "Edit";
+    edit.disabled = isEditing(group.id);
+    edit.title = isEditing(group.id) ? "This group is being edited" : `Edit ${group.name}`;
     edit.setAttribute("aria-label", edit.title);
-    edit.addEventListener("click", () => selectEditor(group.id));
-
+    edit.addEventListener("click", () => void enterEditMode(group.id));
     mainActions.append(rename, clone, remove, edit);
 
     const divider = document.createElement("span");
@@ -1016,18 +879,71 @@ function renderGroups() {
 
     const stateAction = document.createElement("div");
     stateAction.className = "group-state-action";
-    const active = isGroupActive(group.id);
     const load = document.createElement("button");
     load.type = "button";
-    load.textContent = active ? "Unload" : "Load";
-    load.addEventListener("click", () => void changeGroupActive(group.id, !active));
+    load.dataset.role = "group-state-button";
+    load.textContent = isGroupActive(group.id) ? "Unload" : "Load";
+    load.addEventListener("click", () => void changeGroupActive(group.id, !isGroupActive(group.id)));
     stateAction.append(load);
 
     actions.append(mainActions, divider, stateAction);
-    row.append(dragWrap, nameWrap, summary, actions);
+    header.append(dragWrap, nameWrap, summary, actions);
+    row.append(header);
+    if (expandedGroupIds.has(group.id)) {
+      row.append(renderExpandedBody(group));
+    }
     groupListElement.append(row);
   }
+  groupsEmpty.hidden = currentConfig.poolGroups.length > 0;
+  updateEditorFooter();
   updateMergeButtonStates();
+}
+
+async function enterEditMode(groupId) {
+  if (!currentConfig || isEditing(groupId)) {
+    return;
+  }
+  try {
+    if (rowsByGroupId.size > 0) {
+      syncEditorsIntoDraft();
+    }
+    editingGroupIds.add(groupId);
+    expandedGroupIds.add(groupId);
+    renderAll();
+    if (dirty) {
+      void autosaveChanges();
+    }
+    clearError();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function toggleGroupExpanded(groupId) {
+  if (!currentConfig || !WTP.groupById(currentConfig, groupId)) {
+    return;
+  }
+  try {
+    if (rowsByGroupId.size > 0) {
+      if (isEditing(groupId) && formatShortcutInputs(groupId)) {
+        markDirty();
+      }
+      syncEditorsIntoDraft();
+    }
+    if (expandedGroupIds.has(groupId)) {
+      expandedGroupIds.delete(groupId);
+    } else {
+      expandedGroupIds.add(groupId);
+    }
+    renderGroups();
+    updateCompatibilityValidation({ announce: false });
+    if (dirty) {
+      void autosaveChanges();
+    }
+    clearError();
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 function createSvgElement(name) {
@@ -1071,7 +987,7 @@ function clearStoredGraphPositions() {
 }
 
 function configForGraph() {
-  return previewConfigWithEditor() ?? currentConfig;
+  return previewConfigWithEditors() ?? currentConfig;
 }
 
 function graphPotentialPairIssue(config, firstGroupId, secondGroupId) {
@@ -1572,12 +1488,11 @@ function renderGroupGraph() {
   groupGraphElement.append(svg);
 }
 
+
 function renderAll() {
-  renderEditor();
-  renderActiveGroups();
   renderGroups();
   renderGroupGraph();
-  updateCompatibilityValidation();
+  updateCompatibilityValidation({ announce: false });
 }
 
 async function shortcutMap() {
@@ -1618,41 +1533,210 @@ function applyShortcutMapToTargets(shortcuts, targets) {
   return changed;
 }
 
-async function commitDraftAndSync() {
-  const draft = syncValidDraft();
+function pruneUiState() {
+  if (!currentConfig) {
+    editingGroupIds.clear();
+    expandedGroupIds.clear();
+    return;
+  }
+  const validIds = new Set(currentConfig.poolGroups.map((group) => group.id));
+  for (const groupId of [...editingGroupIds]) {
+    if (!validIds.has(groupId)) {
+      editingGroupIds.delete(groupId);
+    }
+  }
+  for (const groupId of [...expandedGroupIds]) {
+    if (!validIds.has(groupId)) {
+      expandedGroupIds.delete(groupId);
+    }
+  }
+}
+
+async function commitDraftAndSync({ render = true } = {}) {
+  const revision = dirtyRevision;
+  const draft = structuredClone(syncValidDraft());
   const result = await browser.runtime.sendMessage({
     type: "saveConfigAndSync",
     config: draft,
   });
   currentConfig = WTP.normalizeConfig(result.config);
-  if (editingGroupId && !WTP.groupById(currentConfig, editingGroupId)) {
-    editingGroupId = null;
-  }
+  pruneUiState();
   allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
   hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
   muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
-  setDirty(false);
-  renderAll();
+  if (dirtyRevision === revision) {
+    setDirty(false);
+  }
+  if (render) {
+    renderAll();
+  } else {
+    renderGroupGraph();
+    updateCompatibilityValidation({ announce: false });
+  }
   return result;
+}
+
+function autosaveChanges({ render = false } = {}) {
+  const run = async () => {
+    if (!dirty) {
+      return;
+    }
+    try {
+      await commitDraftAndSync({ render });
+      if (!dirty && !draftCompatibilityIssue) {
+        clearError();
+      }
+    } catch (error) {
+      setDirty(true);
+      showError(error.message);
+    }
+  };
+  const next = autosaveQueue.then(run, run);
+  autosaveQueue = next.catch(() => {});
+  return next;
+}
+
+async function finishEditingGroup(groupId) {
+  if (!currentConfig || !isEditing(groupId)) {
+    return;
+  }
+  try {
+    if (formatShortcutInputs(groupId)) {
+      markDirty();
+    }
+    await commitDraftAndSync({ render: false });
+    editingGroupIds.delete(groupId);
+    expandedGroupIds.add(groupId);
+    renderAll();
+    clearError();
+  } catch (error) {
+    setDirty(true);
+    showError(error.message);
+  }
+}
+
+async function addPool(groupId) {
+  if (!currentConfig || !isEditing(groupId)) {
+    return;
+  }
+  let before = null;
+  try {
+    syncValidDraft();
+    before = structuredClone(currentConfig);
+    const group = WTP.groupById(currentConfig, groupId);
+    if (!group || !editorCanAddPool(group)) {
+      updateEditorFooter(groupId);
+      return;
+    }
+    const slot = group.pools.length + 1;
+    group.pools.push(WTP.defaultPool(slot, uniquePoolId(group)));
+    currentConfig = WTP.normalizeConfig(currentConfig);
+    assertDraftCompatibility(currentConfig);
+    markDirty();
+    expandedGroupIds.add(groupId);
+    renderAll();
+    await autosaveChanges();
+  } catch (error) {
+    if (before) {
+      currentConfig = before;
+      renderAll();
+    }
+    showError(error.message);
+  }
+}
+
+async function clonePool(groupId, poolId) {
+  if (!currentConfig || !isEditing(groupId)) {
+    return;
+  }
+  let before = null;
+  try {
+    syncValidDraft();
+    before = structuredClone(currentConfig);
+    const group = WTP.groupById(currentConfig, groupId);
+    if (!group || !editorCanAddPool(group)) {
+      updateEditorFooter(groupId);
+      return;
+    }
+    const sourceIndex = group.pools.findIndex((pool) => pool.id === poolId);
+    if (sourceIndex < 0) {
+      throw new Error("That pool no longer exists.");
+    }
+    const source = group.pools[sourceIndex];
+    const clone = {
+      ...structuredClone(source),
+      id: uniquePoolId(group),
+    };
+    const logicalShortcuts = group.shortcuts.slice(0, group.pools.length);
+    const shortcut = logicalShortcuts[sourceIndex] ?? "";
+    group.pools.splice(sourceIndex + 1, 0, clone);
+    logicalShortcuts.splice(sourceIndex + 1, 0, shortcut);
+    normalizeGroupPoolSlots(group);
+    group.shortcuts = WTP.normalizeShortcuts(logicalShortcuts);
+    currentConfig = WTP.normalizeConfig(currentConfig);
+    markDirty();
+    expandedGroupIds.add(groupId);
+    renderAll();
+    updateCompatibilityValidation();
+    await autosaveChanges();
+  } catch (error) {
+    if (before) {
+      currentConfig = before;
+      renderAll();
+    }
+    showError(error.message);
+  }
+}
+
+async function deletePool(groupId, poolId) {
+  if (!currentConfig || !isEditing(groupId)) {
+    return;
+  }
+  let before = null;
+  try {
+    syncEditorsIntoDraft();
+    before = structuredClone(currentConfig);
+    const group = WTP.groupById(currentConfig, groupId);
+    if (!group) {
+      throw new Error("That pool group no longer exists.");
+    }
+    const index = group.pools.findIndex((pool) => pool.id === poolId);
+    if (index < 0) {
+      throw new Error("That pool no longer exists.");
+    }
+    const logicalShortcuts = group.shortcuts.slice(0, group.pools.length);
+    group.pools.splice(index, 1);
+    logicalShortcuts.splice(index, 1);
+    normalizeGroupPoolSlots(group);
+    group.shortcuts = WTP.normalizeShortcuts(logicalShortcuts);
+    currentConfig = WTP.normalizeConfig(currentConfig);
+    assertDraftCompatibility(currentConfig);
+    markDirty();
+    renderAll();
+    await autosaveChanges();
+  } catch (error) {
+    if (before) {
+      currentConfig = before;
+      renderAll();
+    }
+    showError(error.message);
+  }
 }
 
 async function changeGroupActive(groupId, active) {
   if (!currentConfig) {
     return;
   }
-  setMessage(active ? "Loading pool group…" : "Unloading pool group…");
   let before = null;
   try {
-    // Apply the editor fields first, then validate the resulting active set.
-    // This lets an unload (or single-group replacement) resolve a draft
-    // compatibility conflict instead of being blocked by the pre-change set.
-    syncEditorIntoDraft();
+    syncEditorsIntoDraft();
     before = structuredClone(currentConfig);
     if (active) {
       if (currentConfig.allowMultipleGroups) {
-        if (!currentConfig.activeGroupIds.includes(groupId)) {
-          currentConfig.activeGroupIds.push(groupId);
-        }
+        const activeIds = new Set([...currentConfig.activeGroupIds, groupId]);
+        currentConfig.activeGroupIds = currentConfig.poolGroups
+          .filter((group) => activeIds.has(group.id))
+          .map((group) => group.id);
       } else {
         currentConfig.activeGroupIds = [groupId];
       }
@@ -1662,27 +1746,28 @@ async function changeGroupActive(groupId, active) {
       );
     }
     currentConfig = WTP.normalizeConfig(currentConfig);
-    const group = WTP.groupById(currentConfig, groupId);
+    assertDraftCompatibility(currentConfig);
+    markDirty();
     await commitDraftAndSync();
-    setMessage(`${active ? "Loaded" : "Unloaded"} group “${group?.name ?? groupId}”.`);
+    clearError();
   } catch (error) {
     if (before) {
       currentConfig = before;
       renderAll();
     }
-    setMessage(error.message, { error: true });
+    showError(error.message);
   }
 }
 
 async function mergeGroupIntoEdited(sourceGroupId) {
-  if (!currentConfig || !editingGroupId || sourceGroupId === editingGroupId) {
+  const targetGroupId = singleEditingGroupId();
+  if (!currentConfig || !targetGroupId || sourceGroupId === targetGroupId) {
     return;
   }
 
   let before = null;
-  const targetGroupId = editingGroupId;
   try {
-    syncEditorIntoDraft();
+    syncEditorsIntoDraft();
     const source = WTP.groupById(currentConfig, sourceGroupId);
     const target = WTP.groupById(currentConfig, targetGroupId);
     if (!source || !target) {
@@ -1719,15 +1804,14 @@ async function mergeGroupIntoEdited(sourceGroupId) {
       appDialogConfirm.disabled = false;
     };
 
-    const initialInfo = nonDestructiveIssue
-      ? nonDestructiveIssue.message
-      : `“${source.name}” will remain unchanged after its pools are appended.`;
     const result = await showAppDialog({
       title: `Merge “${source.name}” into “${target.name}”`,
       message: `Append ${source.pools.length} ${poolWord} from “${source.name}” to “${target.name}”.`,
       checkboxLabel: `Remove “${source.name}” after merging (destructive)`,
       checkboxValue: false,
-      info: initialInfo,
+      info: nonDestructiveIssue
+        ? nonDestructiveIssue.message
+        : `“${source.name}” will remain unchanged after its pools are appended.`,
       infoError: Boolean(nonDestructiveIssue),
       confirmLabel: "Merge",
       confirmDisabled: Boolean(nonDestructiveIssue),
@@ -1736,19 +1820,11 @@ async function mergeGroupIntoEdited(sourceGroupId) {
     if (!result.accepted) {
       return;
     }
-    const destructive = Boolean(result.checked);
 
-    // The popup may have changed active-group state while the modal was open.
-    // Re-read the live fields merged into our draft and re-run the preflight
-    // for the selected merge mode before committing.
-    syncEditorIntoDraft();
-    const latestSource = WTP.groupById(currentConfig, sourceGroupId);
-    const latestTarget = WTP.groupById(currentConfig, targetGroupId);
-    if (!latestSource || !latestTarget) {
-      throw new Error("One of the pool groups no longer exists.");
-    }
+    syncEditorsIntoDraft();
+    const destructive = Boolean(result.checked);
     const latestIssue = WTP.groupMergeIssue(
-      currentConfig, latestSource.id, latestTarget.id, { destructive },
+      currentConfig, sourceGroupId, targetGroupId, { destructive },
     );
     if (latestIssue) {
       throw new Error(latestIssue.message);
@@ -1756,23 +1832,23 @@ async function mergeGroupIntoEdited(sourceGroupId) {
 
     before = structuredClone(currentConfig);
     currentConfig = WTP.mergeGroups(
-      currentConfig, latestSource.id, latestTarget.id, { destructive },
+      currentConfig, sourceGroupId, targetGroupId, { destructive },
     );
-    editingGroupId = latestTarget.id;
-    rowsElement = null;
+    editingGroupIds.add(targetGroupId);
+    expandedGroupIds.add(targetGroupId);
+    if (destructive) {
+      editingGroupIds.delete(sourceGroupId);
+      expandedGroupIds.delete(sourceGroupId);
+    }
+    markDirty();
     await commitDraftAndSync();
-    setMessage(
-      destructive
-        ? `Merged “${latestSource.name}” into “${latestTarget.name}” and removed “${latestSource.name}”.`
-        : `Merged “${latestSource.name}” into “${latestTarget.name}”; “${latestSource.name}” was kept.`,
-    );
+    clearError();
   } catch (error) {
     if (before) {
       currentConfig = before;
-      editingGroupId = targetGroupId;
       renderAll();
     }
-    setMessage(error.message, { error: true });
+    showError(error.message);
   }
 }
 
@@ -1796,13 +1872,8 @@ async function deleteGroup(groupId) {
   }
 
   let before = null;
-  const beforeEditingId = editingGroupId;
   try {
-    syncValidDraft();
-    const latestGroup = WTP.groupById(currentConfig, groupId);
-    if (!latestGroup) {
-      throw new Error("That pool group no longer exists.");
-    }
+    syncEditorsIntoDraft();
     before = structuredClone(currentConfig);
     currentConfig.poolGroups = currentConfig.poolGroups.filter(
       (candidate) => candidate.id !== groupId,
@@ -1810,19 +1881,17 @@ async function deleteGroup(groupId) {
     currentConfig.activeGroupIds = currentConfig.activeGroupIds.filter(
       (id) => id !== groupId,
     );
-    if (editingGroupId === groupId) {
-      editingGroupId = null;
-      rowsElement = null;
-    }
+    editingGroupIds.delete(groupId);
+    expandedGroupIds.delete(groupId);
+    markDirty();
     await commitDraftAndSync();
-    setMessage(`Deleted group “${group.name}”.`);
+    clearError();
   } catch (error) {
     if (before) {
       currentConfig = before;
-      editingGroupId = beforeEditingId;
       renderAll();
     }
-    setMessage(error.message, { error: true });
+    showError(error.message);
   }
 }
 
@@ -1830,7 +1899,6 @@ async function renameGroup(groupId) {
   if (!currentConfig) {
     return;
   }
-
   const initialGroup = WTP.groupById(currentConfig, groupId);
   if (!initialGroup) {
     return;
@@ -1846,7 +1914,6 @@ async function renameGroup(groupId) {
   }
 
   let before = null;
-  const beforeEditingId = editingGroupId;
   try {
     syncValidDraft();
     before = structuredClone(currentConfig);
@@ -1854,19 +1921,16 @@ async function renameGroup(groupId) {
     if (!group) {
       throw new Error("That pool group no longer exists.");
     }
-    const oldName = group.name;
-    const requested = entered.trim() || group.name;
-    group.name = uniqueGroupName(requested, group.id);
-    const newName = group.name;
+    group.name = uniqueGroupName(entered.trim() || group.name, group.id);
+    markDirty();
     await commitDraftAndSync();
-    setMessage(`Renamed “${oldName}” to “${newName}”.`);
+    clearError();
   } catch (error) {
     if (before) {
       currentConfig = before;
-      editingGroupId = beforeEditingId;
       renderAll();
     }
-    setMessage(error.message, { error: true });
+    showError(error.message);
   }
 }
 
@@ -1874,16 +1938,14 @@ async function cloneGroup(groupId) {
   if (!currentConfig) {
     return;
   }
-
   const initialSource = WTP.groupById(currentConfig, groupId);
   if (!initialSource) {
     return;
   }
-  const initialDefaultName = uniqueGroupName(`${initialSource.name} copy`);
   const entered = await requestText({
     title: `Clone “${initialSource.name}”`,
     label: "Name for the cloned group",
-    value: initialDefaultName,
+    value: uniqueGroupName(`${initialSource.name} copy`),
     confirmLabel: "Clone",
   });
   if (entered === null) {
@@ -1891,7 +1953,6 @@ async function cloneGroup(groupId) {
   }
 
   let before = null;
-  const beforeEditingId = editingGroupId;
   try {
     syncValidDraft();
     before = structuredClone(currentConfig);
@@ -1899,9 +1960,7 @@ async function cloneGroup(groupId) {
     if (!source) {
       throw new Error("That pool group no longer exists.");
     }
-    const sourceName = source.name;
-    const fallbackName = uniqueGroupName(`${source.name} copy`);
-    const name = uniqueGroupName(entered.trim() || fallbackName);
+    const name = uniqueGroupName(entered.trim() || `${source.name} copy`);
     const clone = {
       id: uniqueGroupId(name),
       name,
@@ -1909,16 +1968,17 @@ async function cloneGroup(groupId) {
       shortcuts: [...source.shortcuts],
     };
     currentConfig.poolGroups.push(clone);
-    editingGroupId = clone.id;
+    editingGroupIds.add(clone.id);
+    expandedGroupIds.add(clone.id);
+    markDirty();
     await commitDraftAndSync();
-    setMessage(`Cloned “${sourceName}” as “${name}”.`);
+    clearError();
   } catch (error) {
     if (before) {
       currentConfig = before;
-      editingGroupId = beforeEditingId;
       renderAll();
     }
-    setMessage(error.message, { error: true });
+    showError(error.message);
   }
 }
 
@@ -1926,12 +1986,10 @@ async function createGroup() {
   if (!currentConfig) {
     return;
   }
-
-  const initialDefaultName = uniqueGroupName("New group");
   const entered = await requestText({
     title: "Create pool group",
     label: "Name for the new group",
-    value: initialDefaultName,
+    value: uniqueGroupName("New group"),
     confirmLabel: "Create",
   });
   if (entered === null) {
@@ -1939,12 +1997,10 @@ async function createGroup() {
   }
 
   let before = null;
-  const beforeEditingId = editingGroupId;
   try {
     syncValidDraft();
     before = structuredClone(currentConfig);
-    const fallbackName = uniqueGroupName("New group");
-    const name = uniqueGroupName(entered.trim() || fallbackName);
+    const name = uniqueGroupName(entered.trim() || "New group");
     const group = {
       id: uniqueGroupId(name),
       name,
@@ -1952,16 +2008,35 @@ async function createGroup() {
       shortcuts: WTP.defaultShortcuts(),
     };
     currentConfig.poolGroups.push(group);
-    editingGroupId = group.id;
+    editingGroupIds.add(group.id);
+    expandedGroupIds.add(group.id);
+    markDirty();
     await commitDraftAndSync();
-    setMessage(`Created “${name}”.`);
+    clearError();
   } catch (error) {
     if (before) {
       currentConfig = before;
-      editingGroupId = beforeEditingId;
       renderAll();
     }
-    setMessage(error.message, { error: true });
+    showError(error.message);
+  }
+}
+
+function refreshRuntimeGroupStateUi() {
+  if (!currentConfig) {
+    return;
+  }
+  for (const row of groupListElement.querySelectorAll(".group-row")) {
+    const groupId = row.dataset.groupId;
+    const active = isGroupActive(groupId);
+    const badge = row.querySelector('[data-role="active-badge"]');
+    const stateButton = row.querySelector('[data-role="group-state-button"]');
+    if (badge) {
+      badge.hidden = !active;
+    }
+    if (stateButton) {
+      stateButton.textContent = active ? "Unload" : "Load";
+    }
   }
 }
 
@@ -1969,9 +2044,7 @@ function applyRemoteConfiguration(rawConfig, { preserveDraft = dirty } = {}) {
   const remote = WTP.normalizeConfig(rawConfig);
   if (!currentConfig || !preserveDraft) {
     currentConfig = remote;
-    if (editingGroupId && !WTP.groupById(currentConfig, editingGroupId)) {
-      editingGroupId = null;
-    }
+    pruneUiState();
     allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
     hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
     muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
@@ -1979,16 +2052,12 @@ function applyRemoteConfiguration(rawConfig, { preserveDraft = dirty } = {}) {
     return;
   }
 
-  // Popup actions only change live/runtime fields. Merge those into an
-  // unsaved settings draft without rebuilding the editor DOM, which preserves
-  // partially typed URLs and other in-progress field values.
   const localGroupIds = new Set(currentConfig.poolGroups.map((group) => group.id));
   currentConfig.enabled = remote.enabled;
   currentConfig.activeGroupIds = remote.activeGroupIds.filter(
     (groupId) => localGroupIds.has(groupId),
   );
-  renderActiveGroups();
-  renderGroups();
+  refreshRuntimeGroupStateUi();
   renderGroupGraph();
   updateEditorFooter();
   updateCompatibilityValidation();
@@ -2002,31 +2071,22 @@ async function loadPage() {
     ]);
     currentConfig = config;
     const shortcutsChanged = applyShortcutMapToActiveGroups(shortcuts);
-    editingGroupId = null;
+    editingGroupIds.clear();
+    expandedGroupIds.clear();
     allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
     hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
     muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
     renderAll();
-    setDirty(shortcutsChanged);
     if (shortcutsChanged) {
-      setMessage("Browser shortcut changes detected. Save to store them in the active groups.");
+      markDirty();
+      await autosaveChanges();
+    } else {
+      setDirty(false);
     }
   } catch (error) {
-    setMessage(error.message, { error: true });
+    showError(error.message);
   }
 }
-
-saveButton.addEventListener("click", async () => {
-  saveButton.disabled = true;
-  setMessage("Saving…");
-  try {
-    await commitDraftAndSync();
-    setMessage("Saved.");
-  } catch (error) {
-    setMessage(error.message, { error: true });
-    setDirty(true);
-  }
-});
 
 browser.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local" || !changes[WTP.CONFIG_KEY] || !currentConfig) {
@@ -2037,7 +2097,10 @@ browser.storage.onChanged.addListener((changes, areaName) => {
 
 shortcutSettingsButton.addEventListener("click", async () => {
   try {
-    syncValidDraft();
+    if (formatAllShortcutInputs()) {
+      markDirty();
+    }
+    await commitDraftAndSync({ render: false });
     const savedConfig = await WTP.loadConfig();
     shortcutAssignmentTargets = WTP.activePoolAssignments(savedConfig).map(
       (assignment) => ({
@@ -2048,8 +2111,9 @@ shortcutSettingsButton.addEventListener("click", async () => {
     );
     reloadShortcutsOnFocus = true;
     await browser.runtime.sendMessage({ type: "openShortcutSettings" });
+    clearError();
   } catch (error) {
-    setMessage(error.message, { error: true });
+    showError(error.message);
   }
 });
 
@@ -2058,12 +2122,11 @@ createGroupButton.addEventListener("click", () => void createGroup());
 resetGroupGraphButton.addEventListener("click", () => {
   clearStoredGraphPositions();
   renderGroupGraph();
-  setMessage("Restored the default group graph arrangement.");
 });
 
 exportConfigButton.addEventListener("click", () => {
   try {
-    const config = syncEditorIntoDraft();
+    const config = syncEditorsIntoDraft();
     const blob = new Blob(
       [JSON.stringify(config, null, 2) + "\n"],
       { type: "application/json" },
@@ -2074,17 +2137,17 @@ exportConfigButton.addEventListener("click", () => {
     link.download = "warm-tab-pool-config.json";
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
-    setMessage("Exported the current configuration draft as JSON.");
+    clearError();
   } catch (error) {
-    setMessage(error.message, { error: true });
+    showError(error.message);
   }
 });
 
 importConfigButton.addEventListener("click", async () => {
   if (dirty) {
     const confirmed = await requestConfirmation({
-      title: "Replace unsaved changes?",
-      message: "Importing a configuration will replace the current unsaved settings draft.",
+      title: "Replace pending changes?",
+      message: "Importing a configuration will replace changes that could not yet be saved automatically.",
       confirmLabel: "Import",
     });
     if (!confirmed) {
@@ -2100,7 +2163,6 @@ importFileInput.addEventListener("change", async () => {
     return;
   }
   importConfigButton.disabled = true;
-  setMessage("Importing configuration…");
   try {
     const raw = JSON.parse(await file.text());
     if (
@@ -2112,23 +2174,22 @@ importFileInput.addEventListener("change", async () => {
     ) {
       throw new Error(`This JSON file is not a Warm Tab Pool configuration version ${WTP.CONFIG_VERSION}.`);
     }
-
     const imported = WTP.normalizeConfig(raw);
-
     const result = await browser.runtime.sendMessage({
       type: "saveConfigAndSync",
       config: imported,
     });
     currentConfig = WTP.normalizeConfig(result.config);
-    editingGroupId = null;
+    editingGroupIds.clear();
+    expandedGroupIds.clear();
     allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
     hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
     muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
     renderAll();
     setDirty(false);
-    setMessage("Imported configuration.");
+    clearError();
   } catch (error) {
-    setMessage(`Import failed: ${error.message}`, { error: true });
+    showError(`Import failed: ${error.message}`);
   } finally {
     importFileInput.value = "";
     importConfigButton.disabled = false;
@@ -2136,7 +2197,10 @@ importFileInput.addEventListener("change", async () => {
 });
 
 for (const input of [hideWarmTabsInput, muteWarmTabsInput]) {
-  input.addEventListener("change", markDirty);
+  input.addEventListener("change", () => {
+    markDirty();
+    void autosaveChanges();
+  });
 }
 
 allowMultipleGroupsInput.addEventListener("change", () => {
@@ -2144,180 +2208,259 @@ allowMultipleGroupsInput.addEventListener("change", () => {
     return;
   }
   try {
-    syncEditorIntoDraft();
+    syncEditorsIntoDraft();
     if (!allowMultipleGroupsInput.checked && currentConfig.activeGroupIds.length > 1) {
       currentConfig.activeGroupIds = [currentConfig.activeGroupIds[0]];
-      setMessage("Multiple-group mode is disabled in the draft; saving will unload all but the first active group.");
     }
     markDirty();
     renderAll();
+    void autosaveChanges();
   } catch (error) {
-    setMessage(error.message, { error: true });
+    showError(error.message);
   }
 });
 
-editorHost.addEventListener("input", (event) => {
-  if (event.target.closest(".group-panel.editor")) {
-    markDirty();
-    updateCompatibilityValidation();
-    updateMergeButtonStates();
-    renderGroupGraph();
+groupListElement.addEventListener("input", (event) => {
+  if (!event.target.closest(".group-row.editing")) {
+    return;
   }
-});
-editorHost.addEventListener("change", (event) => {
-  if (event.target.closest(".group-panel.editor")) {
-    markDirty();
-    updateCompatibilityValidation();
-    updateMergeButtonStates();
-    renderGroupGraph();
-  }
+  markDirty();
+  updateCompatibilityValidation();
+  updateMergeButtonStates();
+  renderGroupGraph();
 });
 
-function activeGroupDomOrder() {
-  return Array.from(
-    activeGroupsHost.querySelectorAll(".active-group-panel"),
-    (panel) => panel.dataset.groupId,
-  );
-}
-
-function mergeVisibleActiveOrder(visibleOrder) {
-  const visibleIds = new Set(visibleOrder);
-  let visibleIndex = 0;
-  return currentConfig.activeGroupIds.map((groupId) => {
-    if (!visibleIds.has(groupId)) {
-      return groupId;
-    }
-    const replacement = visibleOrder[visibleIndex];
-    visibleIndex += 1;
-    return replacement;
-  });
-}
-
-activeGroupsHost.addEventListener("dragstart", (event) => {
-  const handle = event.target.closest(".active-group-drag-handle");
-  if (!handle) {
+groupListElement.addEventListener("change", (event) => {
+  if (!event.target.closest(".group-row.editing")) {
     return;
   }
-  draggedActiveGroupPanel = handle.closest(".active-group-panel");
-  draggedActiveGroupOrder = activeGroupDomOrder().join(",");
-  draggedActiveGroupPanel.classList.add("dragging");
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", draggedActiveGroupPanel.dataset.groupId);
+  if (event.target.matches(".pool-shortcut")) {
+    return;
+  }
+  markDirty();
+  updateCompatibilityValidation();
+  updateMergeButtonStates();
+  renderGroupGraph();
+  void autosaveChanges();
 });
 
-activeGroupsHost.addEventListener("dragover", (event) => {
-  if (!draggedActiveGroupPanel) {
+groupListElement.addEventListener("focusout", (event) => {
+  if (!event.target.matches(".pool-shortcut")) {
     return;
   }
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
-  const target = event.target.closest(".active-group-panel");
-  if (!target || target === draggedActiveGroupPanel) {
-    return;
-  }
-  const rect = target.getBoundingClientRect();
-  const after = event.clientY > rect.top + rect.height / 2;
-  activeGroupsHost.insertBefore(
-    draggedActiveGroupPanel,
-    after ? target.nextSibling : target,
-  );
-});
-
-activeGroupsHost.addEventListener("drop", (event) => {
-  if (draggedActiveGroupPanel) {
-    event.preventDefault();
-  }
-});
-
-activeGroupsHost.addEventListener("dragend", async () => {
-  if (!draggedActiveGroupPanel || !currentConfig) {
-    return;
-  }
-  draggedActiveGroupPanel.classList.remove("dragging");
-  const visibleOrder = activeGroupDomOrder();
-  const changed = visibleOrder.join(",") !== draggedActiveGroupOrder;
-  draggedActiveGroupPanel = null;
-  draggedActiveGroupOrder = "";
-  if (!changed) {
-    return;
-  }
-
-  const issue = updateCompatibilityValidation();
-  if (issue) {
-    renderActiveGroups();
-    return;
-  }
-
-  const beforeOrder = [...currentConfig.activeGroupIds];
-  const nextOrder = mergeVisibleActiveOrder(visibleOrder);
-  currentConfig.activeGroupIds = nextOrder;
-  renderActiveGroups();
-  renderGroups();
   try {
-    await browser.runtime.sendMessage({
-      type: "reorderActiveGroups",
-      groupIds: nextOrder,
-    });
-    const saved = await WTP.loadConfig();
-    currentConfig.activeGroupIds = saved.activeGroupIds.filter(
-      (groupId) => Boolean(WTP.groupById(currentConfig, groupId)),
-    );
-    renderActiveGroups();
-    renderGroups();
-    setMessage("Reordered active groups.");
+    if (formatShortcutInput(event.target)) {
+      markDirty();
+    }
+    updateCompatibilityValidation();
+    updateMergeButtonStates();
+    renderGroupGraph();
+    void autosaveChanges();
   } catch (error) {
-    currentConfig.activeGroupIds = beforeOrder;
-    renderActiveGroups();
-    renderGroups();
-    setMessage(error.message, { error: true });
+    markDirty();
+    updateCompatibilityValidation();
+    showError(error.message);
   }
 });
 
 function groupDomOrder() {
-  return Array.from(groupListElement.querySelectorAll(".group-row"),
-    (row) => row.dataset.groupId).join(",");
+  return Array.from(
+    groupListElement.querySelectorAll(":scope > .group-row"),
+    (row) => row.dataset.groupId,
+  );
+}
+
+function clearPoolDropTargets() {
+  groupListElement.querySelectorAll(".editable-pool-body.pool-drop-target").forEach(
+    (body) => body.classList.remove("pool-drop-target"),
+  );
+}
+
+async function handlePoolDrop(event, targetBody, dragInfo) {
+  let before = null;
+  try {
+    syncEditorsIntoDraft();
+    before = structuredClone(currentConfig);
+    const source = WTP.groupById(currentConfig, dragInfo.sourceGroupId);
+    const targetGroupId = targetBody.dataset.groupId;
+    const target = WTP.groupById(currentConfig, targetGroupId);
+    if (!source || !target || !isEditing(source.id) || !isEditing(target.id)) {
+      throw new Error("Pools can only be moved between groups that are currently being edited.");
+    }
+    if (source.id !== target.id && target.pools.length >= WTP.MAX_POOLS) {
+      throw new Error(`The target group already contains the maximum ${WTP.MAX_POOLS} pools.`);
+    }
+
+    const sourceIndex = source.pools.findIndex((pool) => pool.id === dragInfo.poolId);
+    if (sourceIndex < 0) {
+      throw new Error("That pool no longer exists.");
+    }
+    const targetRow = event.target.closest("tr");
+    const targetPoolId = targetRow?.dataset.poolId ?? null;
+    if (source.id === target.id && targetPoolId === dragInfo.poolId) {
+      return;
+    }
+    const after = targetRow
+      ? event.clientY > targetRow.getBoundingClientRect().top + targetRow.getBoundingClientRect().height / 2
+      : true;
+
+    const sourceShortcuts = source.shortcuts.slice(0, source.pools.length);
+    const [pool] = source.pools.splice(sourceIndex, 1);
+    const [shortcut = ""] = sourceShortcuts.splice(sourceIndex, 1);
+
+    let targetShortcuts;
+    let insertIndex;
+    if (source.id === target.id) {
+      targetShortcuts = sourceShortcuts;
+      if (!targetPoolId) {
+        insertIndex = source.pools.length;
+      } else {
+        const targetIndex = source.pools.findIndex((candidate) => candidate.id === targetPoolId);
+        insertIndex = targetIndex < 0 ? source.pools.length : targetIndex + (after ? 1 : 0);
+      }
+      source.pools.splice(insertIndex, 0, pool);
+      targetShortcuts.splice(insertIndex, 0, shortcut);
+      normalizeGroupPoolSlots(source);
+      source.shortcuts = WTP.normalizeShortcuts(targetShortcuts);
+    } else {
+      targetShortcuts = target.shortcuts.slice(0, target.pools.length);
+      if (!targetPoolId) {
+        insertIndex = target.pools.length;
+      } else {
+        const targetIndex = target.pools.findIndex((candidate) => candidate.id === targetPoolId);
+        insertIndex = targetIndex < 0 ? target.pools.length : targetIndex + (after ? 1 : 0);
+      }
+      target.pools.splice(insertIndex, 0, pool);
+      targetShortcuts.splice(insertIndex, 0, shortcut);
+      normalizeGroupPoolSlots(source);
+      normalizeGroupPoolSlots(target);
+      source.shortcuts = WTP.normalizeShortcuts(sourceShortcuts);
+      target.shortcuts = WTP.normalizeShortcuts(targetShortcuts);
+    }
+
+    currentConfig = WTP.normalizeConfig(currentConfig);
+    assertDraftCompatibility(currentConfig);
+    expandedGroupIds.add(source.id);
+    expandedGroupIds.add(target.id);
+    markDirty();
+    renderAll();
+    await autosaveChanges();
+    clearError();
+  } catch (error) {
+    if (before) {
+      currentConfig = before;
+      renderAll();
+    }
+    showError(error.message);
+  }
 }
 
 groupListElement.addEventListener("dragstart", (event) => {
-  const handle = event.target.closest(".drag-handle");
-  if (!handle) {
+  const poolHandle = event.target.closest(".pool-drag-handle");
+  if (poolHandle) {
+    try {
+      if (formatAllShortcutInputs()) {
+        markDirty();
+      }
+      syncEditorsIntoDraft();
+    } catch (error) {
+      event.preventDefault();
+      showError(error.message);
+      return;
+    }
+    const row = poolHandle.closest("tr");
+    draggedPool = {
+      sourceGroupId: row.dataset.groupId,
+      poolId: row.dataset.poolId,
+      row,
+    };
+    row.classList.add("dragging");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", `${row.dataset.groupId}:${row.dataset.poolId}`);
     return;
   }
-  draggedGroupRow = handle.closest(".group-row");
-  draggedGroupOrder = groupDomOrder();
+
+  const groupHandle = event.target.closest(".group-drag-handle");
+  if (!groupHandle) {
+    return;
+  }
+  try {
+    if (formatAllShortcutInputs()) {
+      markDirty();
+    }
+    syncValidDraft();
+  } catch (error) {
+    event.preventDefault();
+    showError(error.message);
+    return;
+  }
+  draggedGroupRow = groupHandle.closest(".group-row");
+  draggedGroupOrder = groupDomOrder().join(",");
   draggedGroupRow.classList.add("dragging");
   event.dataTransfer.effectAllowed = "move";
   event.dataTransfer.setData("text/plain", draggedGroupRow.dataset.groupId);
 });
 
 groupListElement.addEventListener("dragover", (event) => {
+  if (draggedPool) {
+    clearPoolDropTargets();
+    const expandedBody = event.target.closest(".group-expanded-body");
+    const targetBody = event.target.closest(".editable-pool-body")
+      ?? expandedBody?.querySelector(".editable-pool-body");
+    if (!targetBody || !isEditing(targetBody.dataset.groupId)) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    targetBody.classList.add("pool-drop-target");
+    return;
+  }
   if (!draggedGroupRow) {
     return;
   }
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
   const target = event.target.closest(".group-row");
   if (!target || target === draggedGroupRow) {
     return;
   }
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
   const rect = target.getBoundingClientRect();
   const after = event.clientY > rect.top + rect.height / 2;
   groupListElement.insertBefore(draggedGroupRow, after ? target.nextSibling : target);
 });
 
 groupListElement.addEventListener("drop", (event) => {
+  if (draggedPool) {
+    const expandedBody = event.target.closest(".group-expanded-body");
+    const targetBody = event.target.closest(".editable-pool-body")
+      ?? expandedBody?.querySelector(".editable-pool-body");
+    const dragInfo = draggedPool;
+    dragInfo.row.classList.remove("dragging");
+    draggedPool = null;
+    clearPoolDropTargets();
+    if (targetBody) {
+      event.preventDefault();
+      void handlePoolDrop(event, targetBody, dragInfo);
+    }
+    return;
+  }
   if (draggedGroupRow) {
     event.preventDefault();
   }
 });
 
-groupListElement.addEventListener("dragend", async () => {
+groupListElement.addEventListener("dragend", () => {
+  if (draggedPool) {
+    draggedPool.row.classList.remove("dragging");
+    draggedPool = null;
+    clearPoolDropTargets();
+    return;
+  }
   if (!draggedGroupRow || !currentConfig) {
     return;
   }
   draggedGroupRow.classList.remove("dragging");
-  const order = Array.from(groupListElement.querySelectorAll(".group-row"),
-    (row) => row.dataset.groupId);
+  const order = groupDomOrder();
   const changed = order.join(",") !== draggedGroupOrder;
   draggedGroupRow = null;
   draggedGroupOrder = "";
@@ -2325,23 +2468,31 @@ groupListElement.addEventListener("dragend", async () => {
     return;
   }
 
-  let before = null;
-  const beforeEditingId = editingGroupId;
-  try {
-    syncValidDraft();
-    before = structuredClone(currentConfig);
-    const byId = new Map(currentConfig.poolGroups.map((group) => [group.id, group]));
-    currentConfig.poolGroups = order.map((id) => byId.get(id)).filter(Boolean);
-    await commitDraftAndSync();
-    setMessage("Reordered pool groups.");
-  } catch (error) {
-    if (before) {
-      currentConfig = before;
-      editingGroupId = beforeEditingId;
+  void (async () => {
+    let before = null;
+    try {
+      syncValidDraft();
+      before = structuredClone(currentConfig);
+      const byId = new Map(currentConfig.poolGroups.map((group) => [group.id, group]));
+      currentConfig.poolGroups = order.map((id) => byId.get(id)).filter(Boolean);
+      const activeIds = new Set(currentConfig.activeGroupIds);
+      currentConfig.activeGroupIds = currentConfig.poolGroups
+        .filter((group) => activeIds.has(group.id))
+        .map((group) => group.id);
+      currentConfig = WTP.normalizeConfig(currentConfig);
+      assertDraftCompatibility(currentConfig);
+      markDirty();
+      renderAll();
+      await autosaveChanges();
+      clearError();
+    } catch (error) {
+      if (before) {
+        currentConfig = before;
+      }
+      renderAll();
+      showError(error.message);
     }
-    setMessage(error.message, { error: true });
-    renderAll();
-  }
+  })();
 });
 
 window.addEventListener("focus", async () => {
@@ -2356,10 +2507,11 @@ window.addEventListener("focus", async () => {
     if (changed) {
       markDirty();
       renderAll();
-      setMessage("Browser shortcut changes detected. Save to store them in the active groups.");
+      await autosaveChanges();
     }
+    clearError();
   } catch (error) {
-    setMessage(`Could not reload browser shortcuts: ${error.message}`, { error: true });
+    showError(`Could not reload browser shortcuts: ${error.message}`);
   }
 });
 

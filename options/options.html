@@ -41,35 +41,23 @@
       <p class="note">Warm tabs stay non-discardable while pooled. Normal Firefox discarding is restored after a tab is taken.</p>
     </section>
 
-    <section class="card" id="activePoolsCard">
-      <div class="section-title">
-        <div>
-          <h2>Active pools</h2>
-          <p class="hint">Type shortcuts as text, for example <code>Ctrl+Shift+1</code> or <code>F13</code>. Leave blank for no shortcut.</p>
-        </div>
-        <div class="section-buttons">
-          <button id="shortcutSettings" type="button">Browser shortcut settings</button>
-        </div>
-      </div>
-
-      <div id="editorHost"></div>
-      <div id="activeGroupsHost" class="active-groups"></div>
-      <p id="activePoolsEmpty" class="empty-state" hidden>No groups are active.</p>
-    </section>
-
     <section class="card" id="poolGroupsCard">
       <div class="section-title group-section-title">
         <div>
           <h2>Pool groups</h2>
+          <p class="hint">Type shortcuts as text, for example <code>Ctrl+Shift+1</code> or <code>F13</code>. Leave blank for no shortcut.</p>
         </div>
-        <div class="config-buttons">
+        <div class="section-buttons">
+          <button id="shortcutSettings" type="button">Browser shortcut settings</button>
           <button id="importConfig" type="button">Import JSON</button>
           <button id="exportConfig" type="button">Export JSON</button>
           <input id="importFile" type="file" accept="application/json,.json" hidden>
         </div>
       </div>
 
+      <p id="errorBanner" class="error-banner" role="alert" hidden></p>
       <div id="groupList" class="group-list"></div>
+      <p id="groupsEmpty" class="empty-state" hidden>No pool groups configured.</p>
       <button id="createGroup" class="plus-button group-plus" type="button" aria-label="New group" title="New group">+</button>
     </section>
 
@@ -84,11 +72,6 @@
       <div id="groupGraph" class="group-graph" role="group" aria-label="Pool group compatibility graph"></div>
       <p id="groupGraphEmpty" class="empty-state graph-empty" hidden>No groups to display.</p>
     </section>
-
-    <div class="actions">
-      <div id="message" role="status" aria-live="polite"></div>
-      <button id="save" class="primary" type="button" disabled>Save</button>
-    </div>
   </main>
 
   <dialog id="appDialog" class="app-dialog" aria-labelledby="appDialogTitle">

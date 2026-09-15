@@ -321,12 +321,14 @@ async function popupState() {
   const config = await WTP.loadConfig();
   const entries = await taggedTabs();
   const activeIds = new Set(config.activeGroupIds);
+  const statuses = snapshotFrom(config, entries);
 
   return {
     enabled: config.enabled,
     allowMultipleGroups: config.allowMultipleGroups,
     maxActivePools: WTP.MAX_POOLS,
     activePoolCount: WTP.activePoolAssignments(config).length,
+    warmTabCount: statuses.reduce((total, status) => total + status.total, 0),
     activeGroupIds: [...config.activeGroupIds],
     groups: config.poolGroups.map((group) => {
       const active = activeIds.has(group.id);
@@ -343,7 +345,7 @@ async function popupState() {
         ),
       };
     }),
-    statuses: snapshotFrom(config, entries),
+    statuses,
   };
 }
 
@@ -559,37 +561,16 @@ async function setGroupActive(groupId, active) {
 
     if (active) {
       if (config.allowMultipleGroups) {
-        if (!config.activeGroupIds.includes(groupId)) {
-          config.activeGroupIds.push(groupId);
-        }
+        const activeIds = new Set([...config.activeGroupIds, groupId]);
+        config.activeGroupIds = config.poolGroups
+          .filter((candidate) => activeIds.has(candidate.id))
+          .map((candidate) => candidate.id);
       } else {
         config.activeGroupIds = [groupId];
       }
     } else {
       config.activeGroupIds = config.activeGroupIds.filter((id) => id !== groupId);
     }
-  });
-  return popupState();
-}
-
-async function reorderActiveGroups(rawOrder) {
-  await transitionConfiguration((config) => {
-    const activeIds = new Set(config.activeGroupIds);
-    const reordered = [];
-    const requested = Array.isArray(rawOrder) ? rawOrder : [];
-
-    for (const rawId of requested) {
-      const id = String(rawId ?? "");
-      if (activeIds.has(id) && !reordered.includes(id)) {
-        reordered.push(id);
-      }
-    }
-    for (const id of config.activeGroupIds) {
-      if (!reordered.includes(id)) {
-        reordered.push(id);
-      }
-    }
-    config.activeGroupIds = reordered;
   });
   return popupState();
 }
@@ -691,9 +672,6 @@ browser.runtime.onMessage.addListener((message) => {
       String(message.groupId ?? ""),
       Boolean(message.active),
     ));
-  }
-  if (message.type === "reorderActiveGroups") {
-    return serialized(() => reorderActiveGroups(message.groupIds));
   }
   if (message.type === "setEnabled") {
     return serialized(() => setEnabled(Boolean(message.enabled)));

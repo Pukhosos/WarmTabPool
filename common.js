@@ -130,11 +130,125 @@
     });
   }
 
+  const SHORTCUT_MODIFIER_ALIASES = Object.freeze({
+    ctrl: "Ctrl",
+    control: "Ctrl",
+    alt: "Alt",
+    option: "Alt",
+    shift: "Shift",
+    command: "Command",
+    cmd: "Command",
+    meta: "Command",
+    macctrl: "MacCtrl",
+  });
+  const SHORTCUT_MODIFIER_ORDER = Object.freeze([
+    "Ctrl", "Alt", "Command", "MacCtrl", "Shift",
+  ]);
+  const SHORTCUT_KEY_ALIASES = Object.freeze({
+    comma: "Comma",
+    period: "Period",
+    home: "Home",
+    end: "End",
+    pageup: "PageUp",
+    pagedown: "PageDown",
+    space: "Space",
+    insert: "Insert",
+    delete: "Delete",
+    up: "Up",
+    down: "Down",
+    left: "Left",
+    right: "Right",
+    medianexttrack: "MediaNextTrack",
+    mediaplaypause: "MediaPlayPause",
+    mediaprevtrack: "MediaPrevTrack",
+    mediastop: "MediaStop",
+  });
+
+  function formatShortcut(raw) {
+    const value = String(raw ?? "").trim();
+    if (!value) {
+      return "";
+    }
+
+    const prepared = value
+      .replace(/\bpage\s+up\b/gi, "PageUp")
+      .replace(/\bpage\s+down\b/gi, "PageDown")
+      .replace(/\bmedia\s+next\s+track\b/gi, "MediaNextTrack")
+      .replace(/\bmedia\s+play\s+pause\b/gi, "MediaPlayPause")
+      .replace(/\bmedia\s+previous\s+track\b/gi, "MediaPrevTrack")
+      .replace(/\bmedia\s+prev\s+track\b/gi, "MediaPrevTrack")
+      .replace(/\bmedia\s+stop\b/gi, "MediaStop")
+      .replace(/\s*\+\s*/g, " ")
+      .trim();
+    const tokens = prepared ? prepared.split(/\s+/) : [];
+    const modifiers = new Set();
+    const keyTokens = [];
+
+    for (const token of tokens) {
+      const modifier = SHORTCUT_MODIFIER_ALIASES[token.toLocaleLowerCase("en-US")];
+      if (modifier) {
+        modifiers.add(modifier);
+      } else {
+        keyTokens.push(token);
+      }
+    }
+
+    if (keyTokens.length !== 1) {
+      throw new Error("shortcut must contain exactly one non-modifier key");
+    }
+
+    const rawKey = keyTokens[0];
+    const lowerKey = rawKey.toLocaleLowerCase("en-US");
+    let key = SHORTCUT_KEY_ALIASES[lowerKey] ?? null;
+    if (!key && /^[a-z]$/i.test(rawKey)) {
+      key = rawKey.toLocaleUpperCase("en-US");
+    } else if (!key && /^\d$/.test(rawKey)) {
+      key = rawKey;
+    } else if (!key && /^f(?:[1-9]|1[0-9])$/i.test(rawKey)) {
+      key = rawKey.toLocaleUpperCase("en-US");
+    }
+    if (!key) {
+      throw new Error(`unsupported shortcut key “${rawKey}”`);
+    }
+
+    const isMediaKey = key.startsWith("Media");
+    const isFunctionKey = /^F(?:[1-9]|1[0-9])$/.test(key);
+    if (isMediaKey) {
+      if (modifiers.size !== 0) {
+        throw new Error("media shortcuts cannot include modifiers");
+      }
+      return key;
+    }
+    if (modifiers.size > 2) {
+      throw new Error("shortcut can contain at most two modifiers");
+    }
+
+    const primaryModifiers = ["Ctrl", "Alt", "Command", "MacCtrl"].filter(
+      (modifier) => modifiers.has(modifier),
+    );
+    if (modifiers.size > 0 && primaryModifiers.length === 0) {
+      throw new Error("Shift cannot be the only modifier");
+    }
+    if (!isFunctionKey && primaryModifiers.length === 0) {
+      throw new Error("shortcut requires Ctrl, Alt, Command, or MacCtrl");
+    }
+
+    const orderedModifiers = SHORTCUT_MODIFIER_ORDER.filter(
+      (modifier) => modifiers.has(modifier),
+    );
+    return [...orderedModifiers, key].join("+");
+  }
+
   function normalizeShortcuts(rawShortcuts) {
     const source = Array.isArray(rawShortcuts) ? rawShortcuts : [];
-    return defaultShortcuts().map((_, index) => (
-      String(source[index] ?? "").trim()
-    ));
+    return defaultShortcuts().map((_, index) => {
+      const value = String(source[index] ?? "").trim();
+      try {
+        return formatShortcut(value);
+      } catch {
+        return value;
+      }
+    });
   }
 
   function normalizeGroup(rawGroup, fallbackId, fallbackName) {
@@ -189,13 +303,19 @@
     }
 
     const validIds = new Set(groups.map((group) => group.id));
-    const activeGroupIds = [];
+    const requestedActiveIds = new Set();
     for (const rawId of source.activeGroupIds) {
       const id = String(rawId ?? "").trim();
-      if (id && validIds.has(id) && !activeGroupIds.includes(id)) {
-        activeGroupIds.push(id);
+      if (id && validIds.has(id)) {
+        requestedActiveIds.add(id);
       }
     }
+    // The unified Pool groups list is the canonical group order. Active groups
+    // use that same order so command-slot allocation never has a second,
+    // hidden ordering independent of the settings UI.
+    const activeGroupIds = groups
+      .filter((group) => requestedActiveIds.has(group.id))
+      .map((group) => group.id);
 
     const allowMultipleGroups = source.allowMultipleGroups !== false;
     if (!allowMultipleGroups && activeGroupIds.length > 1) {
@@ -251,16 +371,29 @@
         continue;
       }
 
-      const key = shortcut.toLocaleLowerCase("en-US");
+      let formattedShortcut;
+      try {
+        formattedShortcut = formatShortcut(shortcut);
+      } catch (error) {
+        return {
+          code: "group-shortcut-format",
+          group,
+          pool,
+          shortcut,
+          message: `Cannot update group “${group.name}”: shortcut “${shortcut}” for “${pool.name}” is invalid (${error.message}).`,
+        };
+      }
+
+      const key = formattedShortcut.toLocaleLowerCase("en-US");
       const previous = seen.get(key);
       if (previous) {
         return {
           code: "group-shortcut-collision",
           group,
-          shortcut,
+          shortcut: formattedShortcut,
           first: previous,
           second: pool,
-          message: `Cannot save group “${group.name}”: shortcut “${shortcut}” is assigned to both “${previous.name}” and “${pool.name}”.`,
+          message: `Cannot update group “${group.name}”: shortcut “${formattedShortcut}” is assigned to both “${previous.name}” and “${pool.name}”.`,
         };
       }
       seen.set(key, pool);
@@ -565,6 +698,7 @@
     defaultPoolGroup,
     defaultConfig,
     normalizeHttpUrl,
+    formatShortcut,
     normalizePools,
     normalizeShortcuts,
     normalizeConfig,
