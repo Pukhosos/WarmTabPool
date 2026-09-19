@@ -31,6 +31,7 @@ const appDialogConfirm = document.querySelector("#appDialogConfirm");
 let currentConfig = null;
 const editingGroupIds = new Set();
 const expandedGroupIds = new Set();
+const animatingGroupIds = new Set();
 let rowsByGroupId = new Map();
 let dirty = false;
 let dirtyRevision = 0;
@@ -698,9 +699,12 @@ function updateEditorFooter(groupId = null) {
   }
 }
 
-function renderExpandedBody(group) {
+function renderExpandedBody(group, { open = true } = {}) {
   const bodyWrap = document.createElement("div");
   bodyWrap.className = "group-expanded-body";
+  bodyWrap.classList.toggle("is-open", open);
+  const content = document.createElement("div");
+  content.className = "group-expanded-content";
   if (isEditing(group.id)) {
     const toolbar = document.createElement("div");
     toolbar.className = "group-editor-toolbar";
@@ -724,18 +728,41 @@ function renderExpandedBody(group) {
     add.type = "button";
     add.textContent = "+";
     add.setAttribute("aria-label", `Add pool to ${group.name}`);
-    add.title = "Add pool";
+    add.title = "Add a new pool to this group";
     add.addEventListener("click", () => void addPool(group.id));
     const note = document.createElement("p");
     note.className = "editor-limit-note";
     footer.append(add, note);
-    bodyWrap.append(toolbar, wrap, footer);
+    content.append(toolbar, wrap, footer);
   } else {
     const { wrap, body } = createPoolTable();
     renderReadonlyRows(group, body);
-    bodyWrap.append(wrap);
+    content.append(wrap);
   }
+  bodyWrap.append(content);
   return bodyWrap;
+}
+
+function waitForGroupExpansionTransition(element) {
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      element.removeEventListener("transitionend", onTransitionEnd);
+      clearTimeout(timeoutId);
+      resolve();
+    };
+    const onTransitionEnd = (event) => {
+      if (event.target === element && event.propertyName === "grid-template-rows") {
+        finish();
+      }
+    };
+    const timeoutId = setTimeout(finish, 320);
+    element.addEventListener("transitionend", onTransitionEnd);
+  });
 }
 
 function updateMergeButtonStates() {
@@ -806,7 +833,6 @@ function renderGroups() {
     name.textContent = group.name;
     name.title = expandedGroupIds.has(group.id) ? `Collapse ${group.name}` : `Expand ${group.name}`;
     name.setAttribute("aria-expanded", String(expandedGroupIds.has(group.id)));
-    name.addEventListener("click", () => void toggleGroupExpanded(group.id));
     nameWrap.append(name);
 
     const activeBadge = makeBadge("Active");
@@ -851,16 +877,22 @@ function renderGroups() {
     const rename = document.createElement("button");
     rename.type = "button";
     rename.textContent = "Rename";
+    rename.title = `Rename “${group.name}” group`;
+    rename.setAttribute("aria-label", rename.title);
     rename.addEventListener("click", () => void renameGroup(group.id));
 
     const clone = document.createElement("button");
     clone.type = "button";
     clone.textContent = "Clone";
+    clone.title = `Create a copy of “${group.name}” as a new group`;
+    clone.setAttribute("aria-label", clone.title);
     clone.addEventListener("click", () => void cloneGroup(group.id));
 
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "Delete";
+    remove.title = `Delete “${group.name}” group`;
+    remove.setAttribute("aria-label", remove.title);
     remove.addEventListener("click", () => void deleteGroup(group.id));
 
     const edit = document.createElement("button");
@@ -868,7 +900,7 @@ function renderGroups() {
     edit.className = "group-edit-button";
     edit.textContent = isEditing(group.id) ? "Edited" : "Edit";
     edit.disabled = isEditing(group.id);
-    edit.title = isEditing(group.id) ? "This group is being edited" : `Edit ${group.name}`;
+    edit.title = isEditing(group.id) ? "This group is being edited" : `Edit “${group.name}” group`;
     edit.setAttribute("aria-label", edit.title);
     edit.addEventListener("click", () => void enterEditMode(group.id));
     mainActions.append(rename, clone, remove, edit);
@@ -883,11 +915,21 @@ function renderGroups() {
     load.type = "button";
     load.dataset.role = "group-state-button";
     load.textContent = isGroupActive(group.id) ? "Unload" : "Load";
+    load.title = isGroupActive(group.id)
+      ? `Unload “${group.name}” group`
+      : `Load “${group.name}” if it is compatible with the active groups`;
+    load.setAttribute("aria-label", load.title);
     load.addEventListener("click", () => void changeGroupActive(group.id, !isGroupActive(group.id)));
     stateAction.append(load);
 
     actions.append(mainActions, divider, stateAction);
     header.append(dragWrap, nameWrap, summary, actions);
+    header.addEventListener("click", (event) => {
+      if (event.target.closest(".group-actions button")) {
+        return;
+      }
+      void toggleGroupExpanded(group.id);
+    });
     row.append(header);
     if (expandedGroupIds.has(group.id)) {
       row.append(renderExpandedBody(group));
@@ -920,22 +962,63 @@ async function enterEditMode(groupId) {
 }
 
 async function toggleGroupExpanded(groupId) {
-  if (!currentConfig || !WTP.groupById(currentConfig, groupId)) {
+  let group = currentConfig ? WTP.groupById(currentConfig, groupId) : null;
+  if (!group || animatingGroupIds.has(groupId)) {
     return;
   }
+  animatingGroupIds.add(groupId);
   try {
     if (rowsByGroupId.size > 0) {
       if (isEditing(groupId) && formatShortcutInputs(groupId)) {
         markDirty();
       }
       syncEditorsIntoDraft();
+      group = WTP.groupById(currentConfig, groupId);
+      if (!group) {
+        return;
+      }
     }
-    if (expandedGroupIds.has(groupId)) {
+
+    const row = groupListElement.querySelector(
+      `.group-row[data-group-id="${CSS.escape(groupId)}"]`,
+    );
+    const nameButton = row?.querySelector(".group-name-button");
+    const wasExpanded = expandedGroupIds.has(groupId);
+
+    if (wasExpanded) {
       expandedGroupIds.delete(groupId);
+      if (nameButton) {
+        nameButton.title = `Expand ${group.name}`;
+        nameButton.setAttribute("aria-expanded", "false");
+      }
+      const body = row?.querySelector(".group-expanded-body");
+      if (body) {
+        body.classList.remove("is-open");
+        await waitForGroupExpansionTransition(body);
+        body.remove();
+      }
+      rowsByGroupId.delete(groupId);
     } else {
       expandedGroupIds.add(groupId);
+      if (nameButton) {
+        nameButton.title = `Collapse ${group.name}`;
+        nameButton.setAttribute("aria-expanded", "true");
+      }
+      if (row) {
+        const body = renderExpandedBody(group, { open: false });
+        row.append(body);
+        updateEditorFooter(groupId);
+        updateMergeButtonStates();
+        // Force the collapsed state to be committed before opening it so the
+        // CSS grid-row transition runs reliably in Firefox.
+        void body.offsetHeight;
+        body.classList.add("is-open");
+        await waitForGroupExpansionTransition(body);
+      } else {
+        renderGroups();
+      }
     }
-    renderGroups();
+
     updateCompatibilityValidation({ announce: false });
     if (dirty) {
       void autosaveChanges();
@@ -943,6 +1026,9 @@ async function toggleGroupExpanded(groupId) {
     clearError();
   } catch (error) {
     showError(error.message);
+    renderGroups();
+  } finally {
+    animatingGroupIds.delete(groupId);
   }
 }
 
@@ -1254,21 +1340,43 @@ function defaultGraphPositions(groups, edges) {
 
 function graphNodeRadius(groupCount) {
   if (groupCount <= 8) {
-    return 32;
+    return 38;
   }
   if (groupCount <= 14) {
-    return 24;
+    return 31;
   }
-  return 17;
+  return 26;
 }
 
-function graphNodeLabel(name, radius) {
-  const maxCharacters = Math.max(2, Math.floor(radius / 3));
-  const value = String(name ?? "");
-  if (value.length <= maxCharacters) {
-    return value;
+function graphNodeLabel(name) {
+  const maxCharacters = 20;
+  const singleLineLimit = 10;
+  const normalized = String(name ?? "").trim().replace(/\s+/g, " ");
+  const value = normalized.length <= maxCharacters
+    ? normalized
+    : `${normalized.slice(0, maxCharacters - 1).trimEnd()}…`;
+  if (value.length <= singleLineLimit) {
+    return [value];
   }
-  return `${value.slice(0, Math.max(1, maxCharacters - 1))}…`;
+
+  const midpoint = value.length / 2;
+  const spaces = [];
+  for (let index = 1; index < value.length - 1; index += 1) {
+    if (value[index] === " ") {
+      spaces.push(index);
+    }
+  }
+  const balancedSpaces = spaces.filter((index) => (
+    Math.max(index, value.length - index - 1) <= singleLineLimit + 2
+  ));
+  const splitIndex = balancedSpaces.length > 0
+    ? balancedSpaces.reduce((best, index) => (
+      Math.abs(index - midpoint) < Math.abs(best - midpoint) ? index : best
+    ))
+    : Math.ceil(value.length / 2);
+  const first = value.slice(0, splitIndex).trim();
+  const second = value.slice(value[splitIndex] === " " ? splitIndex + 1 : splitIndex).trim();
+  return second ? [first, second] : [first];
 }
 
 function graphPointerPosition(svg, event) {
@@ -1378,8 +1486,20 @@ function renderGroupGraph() {
     const circle = createSvgElement("circle");
     circle.setAttribute("r", String(radius));
     const label = createSvgElement("text");
-    label.textContent = graphNodeLabel(group.name, radius);
-    label.style.fontSize = `${Math.max(9, Math.min(13, radius * 0.42))}px`;
+    const labelLines = graphNodeLabel(group.name);
+    const labelFontSize = Math.max(8.5, Math.min(12, radius * 0.31));
+    const lineHeight = labelFontSize * 1.18;
+    label.style.fontSize = `${labelFontSize}px`;
+    label.setAttribute("y", labelLines.length > 1 ? String(-lineHeight / 2) : "0");
+    labelLines.forEach((lineText, index) => {
+      const line = createSvgElement("tspan");
+      line.setAttribute("x", "0");
+      if (index > 0) {
+        line.setAttribute("dy", String(lineHeight));
+      }
+      line.textContent = lineText;
+      label.append(line);
+    });
     node.append(title, circle, label);
 
     const initialPosition = positions.get(group.id);
@@ -2035,7 +2155,14 @@ function refreshRuntimeGroupStateUi() {
       badge.hidden = !active;
     }
     if (stateButton) {
+      const group = WTP.groupById(currentConfig, groupId);
       stateButton.textContent = active ? "Unload" : "Load";
+      if (group) {
+        stateButton.title = active
+          ? `Unload “${group.name}”`
+          : `Load “${group.name}” if it is compatible with the active groups`;
+        stateButton.setAttribute("aria-label", stateButton.title);
+      }
     }
   }
 }

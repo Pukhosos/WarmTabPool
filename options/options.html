@@ -48,9 +48,9 @@
           <p class="hint">Type shortcuts as text, for example <code>Ctrl+Shift+1</code> or <code>F13</code>. Leave blank for no shortcut.</p>
         </div>
         <div class="section-buttons">
-          <button id="shortcutSettings" type="button">Browser shortcut settings</button>
-          <button id="importConfig" type="button">Import JSON</button>
-          <button id="exportConfig" type="button">Export JSON</button>
+          <button id="shortcutSettings" type="button" title="Open Firefox keyboard shortcut settings for Warm Tab Pool">Browser shortcut settings</button>
+          <button id="importConfig" type="button" title="Import a Warm Tab Pool configuration from a JSON file">Import config</button>
+          <button id="exportConfig" type="button" title="Export the current Warm Tab Pool configuration to a JSON file">Export config</button>
           <input id="importFile" type="file" accept="application/json,.json" hidden>
         </div>
       </div>
@@ -58,7 +58,7 @@
       <p id="errorBanner" class="error-banner" role="alert" hidden></p>
       <div id="groupList" class="group-list"></div>
       <p id="groupsEmpty" class="empty-state" hidden>No pool groups configured.</p>
-      <button id="createGroup" class="plus-button group-plus" type="button" aria-label="New group" title="New group">+</button>
+      <button id="createGroup" class="plus-button group-plus" type="button" aria-label="Create a new pool group" title="Create a new pool group">+</button>
     </section>
 
     <section class="card" id="groupGraphCard" aria-labelledby="groupGraphHeading">
@@ -67,7 +67,7 @@
           <h2 id="groupGraphHeading">Group graph</h2>
           <p class="group-graph-hint">Currently loaded groups are highlighted. Solid edges can coexist with the groups loaded now. Dotted edges can coexist as a pair.</p>
         </div>
-        <button id="resetGroupGraph" type="button">To default arrangement</button>
+        <button id="resetGroupGraph" type="button" title="Restore default arrangements of the group graph nodes">Default arrangement</button>
       </div>
       <div id="groupGraph" class="group-graph" role="group" aria-label="Pool group compatibility graph"></div>
       <p id="groupGraphEmpty" class="empty-state graph-empty" hidden>No groups to display.</p>

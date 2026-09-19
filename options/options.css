@@ -82,6 +82,7 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   align-items: center;
   gap: 12px;
   padding: 10px 0;
+  cursor: pointer;
 }
 .group-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .group-name-button {
@@ -161,9 +162,23 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   line-height: 1;
 }
 .group-expanded-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows .22s cubic-bezier(.2, .75, .25, 1),
+    opacity .16s ease;
+}
+.group-expanded-body.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.group-expanded-content {
+  min-height: 0;
+  overflow: hidden;
   padding: 0 10px 12px 40px;
 }
-.group-row.editing .group-expanded-body {
+.group-row.editing .group-expanded-content {
   border-top: 1px solid color-mix(in srgb, AccentColor 24%, CanvasText 10%);
 }
 .group-editor-toolbar {
@@ -201,6 +216,7 @@ th { border-top: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 
   line-height: 1;
 }
 .drag-handle:active { cursor: grabbing; }
+.group-drag-handle { margin-left: 10px; }
 tr.dragging { opacity: .45; }
 .editable-pool-body.pool-drop-target { outline: 2px dashed color-mix(in srgb, AccentColor 68%, CanvasText 20%); outline-offset: -2px; }
 .slot { width: 48px; text-align: center; opacity: .72; }
@@ -365,6 +381,6 @@ tr.dragging { opacity: .45; }
   .group-row-header { grid-template-columns: 30px 1fr; }
   .group-summary, .group-actions { grid-column: 2; }
   .group-actions { justify-self: start; max-width: 100%; overflow-x: auto; }
-  .group-expanded-body { padding-left: 0; }
+  .group-expanded-content { padding-left: 0; }
   .group-graph { height: 360px; }
 }

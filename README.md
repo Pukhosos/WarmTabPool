@@ -46,7 +46,7 @@ The top **Settings** section contains:
 
 All pool-group functionality is in one **Pool groups** section. The former separate **Active pools** section no longer exists.
 
-Click a group name to expand it without entering edit mode. The expanded read-only view shows its pools. Click the name again to collapse it.
+Click anywhere in a group header except its action buttons to expand it without entering edit mode. Expansion and collapse are animated. The expanded read-only view shows its pools.
 
 Each group row provides **Rename**, **Clone**, **Delete**, **Edit/Edited**, and a visually separated **Load/Unload** action. Active and editing states are shown as badges. The entire group remains in its normal list position while expanded or edited.
 
@@ -93,7 +93,7 @@ The **Group graph** remains a top-level section alongside **Settings** and **Poo
 
 Clicking a loaded node unloads it. Clicking an unloaded node uses the same activation path as **Load** and reports the same compatibility error if the transition is invalid.
 
-Nodes are draggable. Their custom graph positions are local options-page UI state. **To default arrangement** clears those positions and rebuilds the computed layout.
+Nodes are draggable. Group names are shown up to 20 characters and can wrap across two centered lines; node size and label font scale with graph density to preserve spacing. Their custom graph positions are local options-page UI state. **Default arrangement** clears those positions and rebuilds the computed layout.
 
 ## Popup
 
@@ -113,7 +113,7 @@ The obsolete background message used solely to reorder the former separate Activ
 
 ## Configuration format
 
-Extension version **0.1.1** uses configuration format version 1.
+Extension version **1.1.0** uses configuration format version 1.
 
 The stored configuration uses `activeGroupIds`, `allowMultipleGroups`, stable group/pool IDs, and a per-group shortcut array. `activeGroupIds` remains the runtime representation of the active set, but normalization derives its order from the unified `poolGroups` order. This removes the former second, independently draggable active-group ordering.
 
