@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Warm Tab Pool",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Keep a pool of preloaded web pages.",
   "permissions": [
     "storage",

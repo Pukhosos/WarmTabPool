@@ -3,12 +3,17 @@
 const allowMultipleGroupsInput = document.querySelector("#allowMultipleGroups");
 const hideWarmTabsInput = document.querySelector("#hideWarmTabs");
 const muteWarmTabsInput = document.querySelector("#muteWarmTabs");
+const handoffDirectionButton = document.querySelector("#handoffDirection");
+const handoffDirectionLabel = document.querySelector("#handoffDirectionLabel");
+const handoffCooldownSlider = document.querySelector("#handoffCooldownSlider");
+const handoffCooldownInput = document.querySelector("#handoffCooldownMs");
 const shortcutSettingsButton = document.querySelector("#shortcutSettings");
 const errorBanner = document.querySelector("#errorBanner");
 const groupListElement = document.querySelector("#groupList");
 const groupsEmpty = document.querySelector("#groupsEmpty");
 const createGroupButton = document.querySelector("#createGroup");
 const groupGraphElement = document.querySelector("#groupGraph");
+const startupGroupGraphElement = document.querySelector("#startupGroupGraph");
 const groupGraphEmpty = document.querySelector("#groupGraphEmpty");
 const resetGroupGraphButton = document.querySelector("#resetGroupGraph");
 const importConfigButton = document.querySelector("#importConfig");
@@ -24,6 +29,7 @@ const appDialogInput = document.querySelector("#appDialogInput");
 const appDialogCheckboxWrap = document.querySelector("#appDialogCheckboxWrap");
 const appDialogCheckbox = document.querySelector("#appDialogCheckbox");
 const appDialogCheckboxLabel = document.querySelector("#appDialogCheckboxLabel");
+const appDialogChecklist = document.querySelector("#appDialogChecklist");
 const appDialogInfo = document.querySelector("#appDialogInfo");
 const appDialogCancel = document.querySelector("#appDialogCancel");
 const appDialogConfirm = document.querySelector("#appDialogConfirm");
@@ -59,6 +65,9 @@ function showAppDialog({
   inputValue = null,
   checkboxLabel = "",
   checkboxValue = null,
+  checklistItems = null,
+  checklistExclusive = false,
+  validateChecklist = null,
   info = "",
   infoError = false,
   confirmLabel = "OK",
@@ -78,6 +87,8 @@ function showAppDialog({
   appDialogCheckboxWrap.hidden = checkboxValue === null;
   appDialogCheckboxLabel.textContent = checkboxLabel;
   appDialogCheckbox.checked = checkboxValue ?? false;
+  appDialogChecklist.replaceChildren();
+  appDialogChecklist.hidden = checklistItems === null;
   appDialogInfo.textContent = info;
   appDialogInfo.hidden = !info;
   appDialogInfo.classList.toggle("error", infoError);
@@ -92,14 +103,67 @@ function showAppDialog({
     removeCheckboxListener = () => appDialogCheckbox.removeEventListener("change", listener);
   }
 
+  const checklistInputs = [];
+  let removeChecklistListeners = null;
+  const selectedChecklistValues = () => checklistInputs
+    .filter((input) => input.checked)
+    .map((input) => input.value);
+
+  if (checklistItems !== null) {
+    const listeners = [];
+    for (const item of checklistItems) {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = String(item.value);
+      input.checked = Boolean(item.checked);
+      const text = document.createElement("span");
+      text.textContent = String(item.label);
+      label.append(input, text);
+      appDialogChecklist.append(label);
+      checklistInputs.push(input);
+    }
+
+    const updateChecklistValidation = (changedInput = null) => {
+      if (checklistExclusive && changedInput?.checked) {
+        for (const input of checklistInputs) {
+          if (input !== changedInput) {
+            input.checked = false;
+          }
+        }
+      }
+      const validationMessage = validateChecklist
+        ? String(validateChecklist(selectedChecklistValues()) ?? "")
+        : "";
+      appDialogInfo.textContent = validationMessage || info;
+      appDialogInfo.hidden = !(validationMessage || info);
+      appDialogInfo.classList.toggle("error", Boolean(validationMessage) || infoError);
+      appDialogConfirm.disabled = confirmDisabled || Boolean(validationMessage);
+    };
+
+    for (const input of checklistInputs) {
+      const listener = () => updateChecklistValidation(input);
+      input.addEventListener("change", listener);
+      listeners.push([input, listener]);
+    }
+    removeChecklistListeners = () => {
+      for (const [input, listener] of listeners) {
+        input.removeEventListener("change", listener);
+      }
+    };
+    updateChecklistValidation();
+  }
+
   return new Promise((resolve) => {
     const onClose = () => {
       removeCheckboxListener?.();
+      removeChecklistListeners?.();
       const accepted = appDialog.returnValue === "confirm";
       resolve({
         accepted,
         value: accepted && inputValue !== null ? appDialogInput.value : null,
         checked: checkboxValue !== null ? appDialogCheckbox.checked : null,
+        selectedValues: checklistItems !== null ? selectedChecklistValues() : null,
       });
     };
     appDialog.addEventListener("close", onClose, { once: true });
@@ -108,6 +172,8 @@ function showAppDialog({
       if (inputValue !== null) {
         appDialogInput.focus();
         appDialogInput.select();
+      } else if (checklistInputs.length > 0) {
+        checklistInputs[0].focus();
       } else {
         appDialogConfirm.focus();
       }
@@ -131,7 +197,11 @@ async function requestConfirmation({ title, message, confirmLabel }) {
 }
 
 appDialogCancel.addEventListener("click", () => appDialog.close("cancel"));
-appDialogForm.addEventListener("submit", () => {
+appDialogForm.addEventListener("submit", (event) => {
+  if (appDialogConfirm.disabled) {
+    event.preventDefault();
+    return;
+  }
   appDialog.returnValue = "confirm";
 });
 
@@ -155,6 +225,36 @@ function setDirty(value) {
 function markDirty() {
   dirty = true;
   dirtyRevision += 1;
+}
+
+function setHandoffDirectionUi(direction) {
+  const normalized = direction === "left" ? "left" : "right";
+  handoffDirectionButton.dataset.direction = normalized;
+  handoffDirectionButton.setAttribute("aria-pressed", String(normalized === "left"));
+  const label = `Place handed tabs to the ${normalized} of the current tab`;
+  handoffDirectionButton.title = label;
+  handoffDirectionButton.setAttribute("aria-label", label);
+  handoffDirectionLabel.textContent = label;
+}
+
+function setHandoffCooldownUi(value) {
+  const normalized = WTP.clampHandoffCooldown(value);
+  handoffCooldownInput.value = String(normalized);
+  handoffCooldownSlider.value = String(Math.min(
+    normalized,
+    WTP.HANDOFF_COOLDOWN_SLIDER_MAX_MS,
+  ));
+}
+
+function renderGlobalSettings() {
+  if (!currentConfig) {
+    return;
+  }
+  allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
+  hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
+  muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
+  setHandoffDirectionUi(currentConfig.handoffDirection);
+  setHandoffCooldownUi(currentConfig.handoffCooldownMs);
 }
 
 function clearInvalid(body) {
@@ -258,6 +358,15 @@ function activePoolCountExcluding(groupId) {
   }
   return WTP.activeGroups(currentConfig)
     .filter((group) => group.id !== groupId)
+    .reduce((total, group) => total + group.pools.length, 0);
+}
+
+function startupPoolCountExcluding(groupId) {
+  if (!currentConfig) {
+    return 0;
+  }
+  return currentConfig.poolGroups
+    .filter((group) => group.loadOnStartup && group.id !== groupId)
     .reduce((total, group) => total + group.pools.length, 0);
 }
 
@@ -432,10 +541,34 @@ function syncGlobalSettingsIntoDraft() {
   currentConfig.allowMultipleGroups = allowMultipleGroupsInput.checked;
   currentConfig.hideWarmTabs = hideWarmTabsInput.checked;
   currentConfig.muteWarmTabs = muteWarmTabsInput.checked;
+  currentConfig.handoffDirection = handoffDirectionButton.dataset.direction === "left"
+    ? "left"
+    : "right";
+  const rawCooldown = handoffCooldownInput.value.trim();
+  if (rawCooldown) {
+    const cooldown = Number(rawCooldown);
+    if (!Number.isInteger(cooldown) || cooldown < 0 || cooldown > WTP.MAX_HANDOFF_COOLDOWN_MS) {
+      throw new Error(`Tab handoff cooldown must be an integer from 0 to ${WTP.MAX_HANDOFF_COOLDOWN_MS} ms.`);
+    }
+    currentConfig.handoffCooldownMs = cooldown;
+  }
   if (!currentConfig.allowMultipleGroups && currentConfig.activeGroupIds.length > 1) {
     currentConfig.activeGroupIds = currentConfig.activeGroupIds.length > 0
       ? [currentConfig.activeGroupIds[0]]
       : [];
+  }
+  if (!currentConfig.allowMultipleGroups) {
+    let keptStartupGroup = false;
+    for (const group of currentConfig.poolGroups) {
+      if (!group.loadOnStartup) {
+        continue;
+      }
+      if (keptStartupGroup) {
+        group.loadOnStartup = false;
+      } else {
+        keptStartupGroup = true;
+      }
+    }
   }
 }
 
@@ -451,6 +584,13 @@ function syncEditorsIntoDraft() {
     const group = WTP.groupById(currentConfig, groupId);
     if (!group) {
       continue;
+    }
+    const rowElement = groupListElement.querySelector(
+      `.group-row[data-group-id="${CSS.escape(groupId)}"]`,
+    );
+    const startupInput = rowElement?.querySelector(".group-startup-input");
+    if (startupInput) {
+      group.loadOnStartup = startupInput.checked;
     }
     group.pools = collectPools(body);
     group.shortcuts = WTP.normalizeShortcuts(collectShortcutArray(body));
@@ -471,6 +611,13 @@ function previewConfigWithEditors() {
     const group = WTP.groupById(draft, groupId);
     if (!group) {
       continue;
+    }
+    const rowElement = groupListElement.querySelector(
+      `.group-row[data-group-id="${CSS.escape(groupId)}"]`,
+    );
+    const startupInput = rowElement?.querySelector(".group-startup-input");
+    if (startupInput) {
+      group.loadOnStartup = startupInput.checked;
     }
     const previousById = new Map(group.pools.map((pool) => [pool.id, pool]));
     const shortcuts = WTP.defaultShortcuts();
@@ -535,10 +682,11 @@ function editorCanAddPool(group) {
   if (group.pools.length >= WTP.MAX_POOLS) {
     return false;
   }
-  if (!isGroupActive(group.id)) {
-    return true;
-  }
-  return activePoolCountExcluding(group.id) + group.pools.length < WTP.MAX_POOLS;
+  const activeCapacityAvailable = !isGroupActive(group.id)
+    || activePoolCountExcluding(group.id) + group.pools.length < WTP.MAX_POOLS;
+  const startupCapacityAvailable = !group.loadOnStartup
+    || startupPoolCountExcluding(group.id) + group.pools.length < WTP.MAX_POOLS;
+  return activeCapacityAvailable && startupCapacityAvailable;
 }
 
 function normalizeGroupPoolSlots(group) {
@@ -682,9 +830,14 @@ function updateEditorFooter(groupId = null) {
     }
     const currentCount = body.querySelectorAll("tr").length;
     const otherActiveCount = activePoolCountExcluding(group.id);
+    const otherStartupCount = startupPoolCountExcluding(group.id);
     const activeCapacityReached = isGroupActive(group.id)
       && otherActiveCount + currentCount >= WTP.MAX_POOLS;
-    const capacityReached = currentCount >= WTP.MAX_POOLS || activeCapacityReached;
+    const startupCapacityReached = group.loadOnStartup
+      && otherStartupCount + currentCount >= WTP.MAX_POOLS;
+    const capacityReached = currentCount >= WTP.MAX_POOLS
+      || activeCapacityReached
+      || startupCapacityReached;
     addButton.disabled = capacityReached;
     rowElement.querySelectorAll(".pool-clone-button").forEach((button) => {
       button.disabled = capacityReached;
@@ -693,8 +846,44 @@ function updateEditorFooter(groupId = null) {
       note.textContent = `This group already contains the maximum ${WTP.MAX_POOLS} pools.`;
     } else if (activeCapacityReached) {
       note.textContent = `The active groups already occupy all ${WTP.MAX_POOLS} shortcut slots.`;
+    } else if (startupCapacityReached) {
+      note.textContent = `The startup groups already occupy all ${WTP.MAX_POOLS} shortcut slots.`;
     } else {
       note.textContent = "";
+    }
+  }
+}
+
+function updateStartupToggleStates() {
+  const draft = previewConfigWithEditors();
+  if (!draft) {
+    return;
+  }
+  const startupIssue = WTP.startupConfigurationIssue(draft);
+  for (const input of groupListElement.querySelectorAll(".group-startup-input")) {
+    const row = input.closest(".group-row");
+    const label = input.closest(".group-startup-toggle");
+    const groupId = row?.dataset.groupId ?? "";
+    const group = WTP.groupById(draft, groupId);
+    if (!label || !group) {
+      continue;
+    }
+
+    if (input.checked) {
+      input.disabled = false;
+      label.classList.remove("unavailable");
+      label.classList.toggle("invalid", Boolean(startupIssue));
+      label.title = startupIssue
+        ? startupIssue.message
+        : `Load “${group.name}” automatically when Firefox starts`;
+    } else {
+      const issue = WTP.groupStartupIssue(draft, groupId);
+      input.disabled = Boolean(issue);
+      label.classList.toggle("unavailable", Boolean(issue));
+      label.classList.remove("invalid");
+      label.title = issue
+        ? issue.message
+        : `Load “${group.name}” automatically when Firefox starts`;
     }
   }
 }
@@ -708,13 +897,30 @@ function renderExpandedBody(group, { open = true } = {}) {
   if (isEditing(group.id)) {
     const toolbar = document.createElement("div");
     toolbar.className = "group-editor-toolbar";
+    const startupLabel = document.createElement("label");
+    startupLabel.className = "group-startup-toggle";
+    startupLabel.title = `Load “${group.name}” automatically when Firefox starts`;
+    const startupInput = document.createElement("input");
+    startupInput.type = "checkbox";
+    startupInput.className = "group-startup-input";
+    startupInput.checked = group.loadOnStartup;
+    startupInput.setAttribute("aria-label", `Load ${group.name} on browser start`);
+    startupInput.addEventListener("input", (event) => event.stopPropagation());
+    startupInput.addEventListener("change", (event) => {
+      event.stopPropagation();
+      void changeGroupStartup(group.id, startupInput.checked);
+    });
+    const startupText = document.createElement("span");
+    startupText.textContent = "Load on browser start";
+    startupLabel.append(startupInput, startupText);
+
     const done = document.createElement("button");
     done.type = "button";
     done.className = "done-button";
     done.textContent = "Done";
     done.title = "Validate and save this group, then leave edit mode";
     done.addEventListener("click", () => void finishEditingGroup(group.id));
-    toolbar.append(done);
+    toolbar.append(startupLabel, done);
 
     const { wrap, body } = createPoolTable({ editable: true });
     body.dataset.groupId = group.id;
@@ -835,6 +1041,12 @@ function renderGroups() {
     name.setAttribute("aria-expanded", String(expandedGroupIds.has(group.id)));
     nameWrap.append(name);
 
+    const startupBadge = makeBadge("Startup");
+    startupBadge.classList.add("startup-badge");
+    startupBadge.dataset.role = "startup-badge";
+    startupBadge.hidden = !group.loadOnStartup;
+    startupBadge.title = "This group is scheduled to load when Firefox starts";
+    nameWrap.append(startupBadge);
     const activeBadge = makeBadge("Active");
     activeBadge.dataset.role = "active-badge";
     activeBadge.hidden = !isGroupActive(group.id);
@@ -939,6 +1151,7 @@ function renderGroups() {
   groupsEmpty.hidden = currentConfig.poolGroups.length > 0;
   updateEditorFooter();
   updateMergeButtonStates();
+  updateStartupToggleStates();
 }
 
 async function enterEditMode(groupId) {
@@ -1083,7 +1296,7 @@ function graphPotentialPairIssue(config, firstGroupId, secondGroupId) {
   return WTP.activeConfigurationIssue(WTP.normalizeConfig(draft));
 }
 
-function graphCurrentPairIssue(config, firstGroupId, secondGroupId) {
+function graphCurrentPairIssue(config, firstGroupId, secondGroupId, selectedGroupIds) {
   if (!config.allowMultipleGroups) {
     return {
       code: "multiple-groups-disabled",
@@ -1092,25 +1305,25 @@ function graphCurrentPairIssue(config, firstGroupId, secondGroupId) {
   }
   const draft = structuredClone(config);
   draft.activeGroupIds = [...new Set([
-    ...config.activeGroupIds,
+    ...selectedGroupIds,
     firstGroupId,
     secondGroupId,
   ])];
   return WTP.activeConfigurationIssue(WTP.normalizeConfig(draft));
 }
 
-function graphRelations(config) {
-  const activeIds = new Set(config.activeGroupIds);
+function graphRelations(config, selectedGroupIds) {
+  const selectedIds = new Set(selectedGroupIds);
   const edges = [];
   for (let firstIndex = 0; firstIndex < config.poolGroups.length; firstIndex += 1) {
     for (let secondIndex = firstIndex + 1; secondIndex < config.poolGroups.length; secondIndex += 1) {
       const first = config.poolGroups[firstIndex];
       const second = config.poolGroups[secondIndex];
-      const active = activeIds.has(first.id) && activeIds.has(second.id);
+      const active = selectedIds.has(first.id) && selectedIds.has(second.id);
       const potentialIssue = graphPotentialPairIssue(config, first.id, second.id);
       const potential = !potentialIssue;
       const currentIssue = potential
-        ? graphCurrentPairIssue(config, first.id, second.id)
+        ? graphCurrentPairIssue(config, first.id, second.id, selectedGroupIds)
         : potentialIssue;
       const current = potential && !currentIssue;
       if (!potential && !active) {
@@ -1391,21 +1604,9 @@ function graphPointerPosition(svg, event) {
   return { x: transformed.x, y: transformed.y };
 }
 
-function renderGroupGraph() {
-  groupGraphElement.replaceChildren();
-  const config = configForGraph();
-  if (!config || config.poolGroups.length === 0) {
-    groupGraphElement.hidden = true;
-    groupGraphEmpty.hidden = false;
-    resetGroupGraphButton.disabled = true;
-    return;
-  }
-
-  groupGraphElement.hidden = false;
-  groupGraphEmpty.hidden = true;
-  resetGroupGraphButton.disabled = false;
-
-  const edges = graphRelations(config);
+function renderCompatibilityGraph(element, config, { mode, selectedGroupIds }) {
+  element.replaceChildren();
+  const edges = graphRelations(config, selectedGroupIds);
   const defaults = defaultGraphPositions(config.poolGroups, edges);
   const stored = graphStoredPositions();
   const radius = graphNodeRadius(config.poolGroups.length);
@@ -1427,7 +1628,9 @@ function renderGroupGraph() {
 
   const svg = createSvgElement("svg");
   svg.setAttribute("viewBox", `0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`);
-  svg.setAttribute("aria-label", "Pool group compatibility graph");
+  svg.setAttribute("aria-label", mode === "startup"
+    ? "Startup pool group compatibility graph"
+    : "Active pool group compatibility graph");
   const edgeLayer = createSvgElement("g");
   const nodeLayer = createSvgElement("g");
   const renderedEdges = [];
@@ -1455,33 +1658,46 @@ function renderGroupGraph() {
     renderedEdges.push({ edge, line });
   }
 
-  const activeIds = new Set(config.activeGroupIds);
+  const selectedIds = new Set(selectedGroupIds);
   for (const group of config.poolGroups) {
     const node = createSvgElement("g");
     node.classList.add("graph-node");
-    if (activeIds.has(group.id)) {
+    if (selectedIds.has(group.id)) {
       node.classList.add("active");
     }
     node.dataset.groupId = group.id;
     node.setAttribute("role", "button");
     node.setAttribute("tabindex", "0");
 
-    const activationIssue = activeIds.has(group.id)
+    const selected = selectedIds.has(group.id);
+    const activationIssue = selected
       ? null
-      : WTP.groupActivationIssue(config, group.id);
-    const actionText = activeIds.has(group.id)
-      ? `Unload “${group.name}”`
+      : mode === "startup"
+        ? WTP.groupStartupIssue(config, group.id)
+        : WTP.groupActivationIssue(config, group.id);
+    const actionVerb = mode === "startup" ? "Schedule" : "Load";
+    const removeVerb = mode === "startup" ? "Remove from startup" : "Unload";
+    const actionText = selected
+      ? `${removeVerb} “${group.name}”`
       : activationIssue
-        ? `Load “${group.name}”. ${activationIssue.message}`
-        : `Load “${group.name}”`;
+        ? `${actionVerb} “${group.name}”. ${activationIssue.message}`
+        : `${actionVerb} “${group.name}”`;
     node.setAttribute("aria-label", actionText);
 
     const title = createSvgElement("title");
-    title.textContent = activeIds.has(group.id)
-      ? `${group.name} — loaded. Click to unload; drag to reposition.`
-      : activationIssue
-        ? `${group.name} — ${activationIssue.message} Click to attempt loading; drag to reposition.`
-        : `${group.name} — click to load; drag to reposition.`;
+    if (mode === "startup") {
+      title.textContent = selected
+        ? `${group.name} — scheduled for browser start. Click to unschedule; drag to reposition.`
+        : activationIssue
+          ? `${group.name} — ${activationIssue.message} Drag to reposition.`
+          : `${group.name} — click to schedule for browser start; drag to reposition.`;
+    } else {
+      title.textContent = selected
+        ? `${group.name} — loaded. Click to unload; drag to reposition.`
+        : activationIssue
+          ? `${group.name} — ${activationIssue.message} Click to attempt loading; drag to reposition.`
+          : `${group.name} — click to load; drag to reposition.`;
+    }
 
     const circle = createSvgElement("circle");
     circle.setAttribute("r", String(radius));
@@ -1557,6 +1773,18 @@ function renderGroupGraph() {
       }
     });
 
+    const activateNode = () => {
+      if (activationIssue && !selected) {
+        showError(activationIssue.message);
+        return;
+      }
+      if (mode === "startup") {
+        void changeGroupStartup(group.id, !selected);
+      } else {
+        void changeGroupActive(group.id, !selected);
+      }
+    };
+
     const finishPointer = (event) => {
       if (pointerId !== event.pointerId) {
         return;
@@ -1576,7 +1804,7 @@ function renderGroupGraph() {
       if (wasMoved) {
         saveGraphPosition(group.id, finalPosition);
       } else {
-        void changeGroupActive(group.id, !activeIds.has(group.id));
+        activateNode();
       }
     };
     node.addEventListener("pointerup", finishPointer);
@@ -1598,14 +1826,40 @@ function renderGroupGraph() {
         return;
       }
       event.preventDefault();
-      void changeGroupActive(group.id, !activeIds.has(group.id));
+      activateNode();
     });
 
     nodeLayer.append(node);
   }
 
   svg.append(edgeLayer, nodeLayer);
-  groupGraphElement.append(svg);
+  element.append(svg);
+}
+
+function renderGroupGraph() {
+  groupGraphElement.replaceChildren();
+  startupGroupGraphElement.replaceChildren();
+  const config = configForGraph();
+  if (!config || config.poolGroups.length === 0) {
+    groupGraphElement.hidden = true;
+    startupGroupGraphElement.hidden = true;
+    groupGraphEmpty.hidden = false;
+    resetGroupGraphButton.disabled = true;
+    return;
+  }
+
+  groupGraphElement.hidden = false;
+  startupGroupGraphElement.hidden = false;
+  groupGraphEmpty.hidden = true;
+  resetGroupGraphButton.disabled = false;
+  renderCompatibilityGraph(groupGraphElement, config, {
+    mode: "active",
+    selectedGroupIds: config.activeGroupIds,
+  });
+  renderCompatibilityGraph(startupGroupGraphElement, config, {
+    mode: "startup",
+    selectedGroupIds: WTP.startupGroupIds(config),
+  });
 }
 
 
@@ -1681,9 +1935,7 @@ async function commitDraftAndSync({ render = true } = {}) {
   });
   currentConfig = WTP.normalizeConfig(result.config);
   pruneUiState();
-  allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
-  hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
-  muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
+  renderGlobalSettings();
   if (dirtyRevision === revision) {
     setDirty(false);
   }
@@ -1875,6 +2127,51 @@ async function changeGroupActive(groupId, active) {
       currentConfig = before;
       renderAll();
     }
+    showError(error.message);
+  }
+}
+
+async function changeGroupStartup(groupId, loadOnStartup) {
+  if (!currentConfig) {
+    return;
+  }
+  const previousStartupState = new Map(
+    currentConfig.poolGroups.map((group) => [group.id, group.loadOnStartup]),
+  );
+  let before = null;
+  try {
+    syncEditorsIntoDraft();
+    before = structuredClone(currentConfig);
+    for (const candidate of before.poolGroups) {
+      candidate.loadOnStartup = previousStartupState.get(candidate.id) === true;
+    }
+    const group = WTP.groupById(currentConfig, groupId);
+    if (!group) {
+      throw new Error("That pool group no longer exists.");
+    }
+
+    if (loadOnStartup) {
+      if (currentConfig.allowMultipleGroups) {
+        group.loadOnStartup = true;
+      } else {
+        for (const candidate of currentConfig.poolGroups) {
+          candidate.loadOnStartup = candidate.id === groupId;
+        }
+      }
+    } else {
+      group.loadOnStartup = false;
+    }
+
+    currentConfig = WTP.normalizeConfig(currentConfig);
+    assertDraftCompatibility(currentConfig);
+    markDirty();
+    await commitDraftAndSync();
+    clearError();
+  } catch (error) {
+    if (before) {
+      currentConfig = before;
+    }
+    renderAll();
     showError(error.message);
   }
 }
@@ -2084,6 +2381,7 @@ async function cloneGroup(groupId) {
     const clone = {
       id: uniqueGroupId(name),
       name,
+      loadOnStartup: false,
       pools: source.pools.map((pool) => ({ ...pool })),
       shortcuts: [...source.shortcuts],
     };
@@ -2124,6 +2422,7 @@ async function createGroup() {
     const group = {
       id: uniqueGroupId(name),
       name,
+      loadOnStartup: false,
       pools: [WTP.defaultPool(1)],
       shortcuts: WTP.defaultShortcuts(),
     };
@@ -2172,9 +2471,7 @@ function applyRemoteConfiguration(rawConfig, { preserveDraft = dirty } = {}) {
   if (!currentConfig || !preserveDraft) {
     currentConfig = remote;
     pruneUiState();
-    allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
-    hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
-    muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
+    renderGlobalSettings();
     renderAll();
     return;
   }
@@ -2200,9 +2497,7 @@ async function loadPage() {
     const shortcutsChanged = applyShortcutMapToActiveGroups(shortcuts);
     editingGroupIds.clear();
     expandedGroupIds.clear();
-    allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
-    hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
-    muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
+    renderGlobalSettings();
     renderAll();
     if (shortcutsChanged) {
       markDirty();
@@ -2253,7 +2548,7 @@ resetGroupGraphButton.addEventListener("click", () => {
 
 exportConfigButton.addEventListener("click", () => {
   try {
-    const config = syncEditorsIntoDraft();
+    const config = syncValidDraft();
     const blob = new Blob(
       [JSON.stringify(config, null, 2) + "\n"],
       { type: "application/json" },
@@ -2292,16 +2587,58 @@ importFileInput.addEventListener("change", async () => {
   importConfigButton.disabled = true;
   try {
     const raw = JSON.parse(await file.text());
+    const supportedVersions = new Set([WTP.LEGACY_CONFIG_VERSION, WTP.CONFIG_VERSION]);
     if (
       !raw
       || typeof raw !== "object"
-      || raw.version !== WTP.CONFIG_VERSION
+      || !supportedVersions.has(Number(raw.version))
       || !Array.isArray(raw.poolGroups)
       || !Array.isArray(raw.activeGroupIds)
     ) {
-      throw new Error(`This JSON file is not a Warm Tab Pool configuration version ${WTP.CONFIG_VERSION}.`);
+      throw new Error(`This JSON file is not a supported Warm Tab Pool configuration (versions ${WTP.LEGACY_CONFIG_VERSION} or ${WTP.CONFIG_VERSION}).`);
     }
+
     const imported = WTP.normalizeConfig(raw);
+    for (const group of imported.poolGroups) {
+      const issue = WTP.groupShortcutIssue(group);
+      if (issue) {
+        throw new Error(issue.message);
+      }
+    }
+    const startupIssue = WTP.startupConfigurationIssue(imported);
+    if (startupIssue) {
+      throw new Error(startupIssue.message);
+    }
+
+    const defaultActiveIds = new Set(imported.activeGroupIds);
+    const selection = await showAppDialog({
+      title: "Choose groups to activate",
+      message: "Select which imported groups should be active after the configuration is loaded.",
+      checklistItems: imported.poolGroups.map((group) => ({
+        value: group.id,
+        label: group.name,
+        checked: defaultActiveIds.has(group.id),
+      })),
+      checklistExclusive: !imported.allowMultipleGroups,
+      validateChecklist: (selectedValues) => {
+        const selected = new Set(selectedValues);
+        const activeGroupIds = imported.poolGroups
+          .filter((group) => selected.has(group.id))
+          .map((group) => group.id);
+        return WTP.activeConfigurationIssue({ ...imported, activeGroupIds })?.message ?? "";
+      },
+      confirmLabel: "Import",
+    });
+    if (!selection.accepted) {
+      return;
+    }
+
+    const selected = new Set(selection.selectedValues ?? []);
+    imported.activeGroupIds = imported.poolGroups
+      .filter((group) => selected.has(group.id))
+      .map((group) => group.id);
+    WTP.assertConfiguration(imported);
+
     const result = await browser.runtime.sendMessage({
       type: "saveConfigAndSync",
       config: imported,
@@ -2309,9 +2646,7 @@ importFileInput.addEventListener("change", async () => {
     currentConfig = WTP.normalizeConfig(result.config);
     editingGroupIds.clear();
     expandedGroupIds.clear();
-    allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
-    hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
-    muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
+    renderGlobalSettings();
     renderAll();
     setDirty(false);
     clearError();
@@ -2321,6 +2656,49 @@ importFileInput.addEventListener("change", async () => {
     importFileInput.value = "";
     importConfigButton.disabled = false;
   }
+});
+
+
+handoffDirectionButton.addEventListener("click", () => {
+  const next = handoffDirectionButton.dataset.direction === "left" ? "right" : "left";
+  setHandoffDirectionUi(next);
+  markDirty();
+  void autosaveChanges();
+});
+
+handoffCooldownSlider.addEventListener("input", () => {
+  handoffCooldownInput.value = handoffCooldownSlider.value;
+  markDirty();
+});
+
+handoffCooldownSlider.addEventListener("change", () => {
+  handoffCooldownInput.value = handoffCooldownSlider.value;
+  markDirty();
+  void autosaveChanges();
+});
+
+handoffCooldownInput.addEventListener("input", () => {
+  const value = Number(handoffCooldownInput.value);
+  if (handoffCooldownInput.value.trim() && Number.isFinite(value)) {
+    handoffCooldownSlider.value = String(Math.min(
+      Math.max(0, Math.round(value)),
+      WTP.HANDOFF_COOLDOWN_SLIDER_MAX_MS,
+    ));
+  }
+  markDirty();
+});
+
+handoffCooldownInput.addEventListener("change", () => {
+  if (!currentConfig) {
+    return;
+  }
+  const raw = handoffCooldownInput.value.trim();
+  const fallback = currentConfig.handoffCooldownMs;
+  const value = raw ? Number(raw) : fallback;
+  const normalized = WTP.clampHandoffCooldown(value);
+  setHandoffCooldownUi(normalized);
+  markDirty();
+  void autosaveChanges();
 });
 
 for (const input of [hideWarmTabsInput, muteWarmTabsInput]) {
@@ -2354,6 +2732,7 @@ groupListElement.addEventListener("input", (event) => {
   markDirty();
   updateCompatibilityValidation();
   updateMergeButtonStates();
+  updateStartupToggleStates();
   renderGroupGraph();
 });
 
@@ -2367,6 +2746,7 @@ groupListElement.addEventListener("change", (event) => {
   markDirty();
   updateCompatibilityValidation();
   updateMergeButtonStates();
+  updateStartupToggleStates();
   renderGroupGraph();
   void autosaveChanges();
 });
@@ -2381,6 +2761,7 @@ groupListElement.addEventListener("focusout", (event) => {
     }
     updateCompatibilityValidation();
     updateMergeButtonStates();
+    updateStartupToggleStates();
     renderGroupGraph();
     void autosaveChanges();
   } catch (error) {

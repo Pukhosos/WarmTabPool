@@ -272,10 +272,15 @@ function renderPools(state) {
       take.addEventListener("click", async () => {
         take.disabled = true;
         try {
-          await browser.runtime.sendMessage({
+          const result = await browser.runtime.sendMessage({
             type: "take",
             slot: status.commandSlot,
           });
+          if (result?.ignored && result.reason === "cooldown") {
+            take.disabled = false;
+            meta.textContent = `Ignored · cooldown (${result.remainingMs} ms remaining)`;
+            return;
+          }
           window.close();
         } catch (error) {
           take.disabled = false;

@@ -5,9 +5,14 @@
   const MIN_POOL_SIZE = 0;
   const MAX_POOL_SIZE = 64;
   const DEFAULT_POOL_SIZE = 1;
+  const DEFAULT_HANDOFF_DIRECTION = "right";
+  const DEFAULT_HANDOFF_COOLDOWN_MS = 150;
+  const MAX_HANDOFF_COOLDOWN_MS = 5000;
+  const HANDOFF_COOLDOWN_SLIDER_MAX_MS = 500;
   const DEFAULT_GROUP_ID = "default";
   const CONFIG_KEY = "config";
-  const CONFIG_VERSION = 1;
+  const CONFIG_VERSION = 2;
+  const LEGACY_CONFIG_VERSION = 1;
   const TAB_VALUE_KEY = "warm-tab-pool:membership";
   const TAB_VALUE_VERSION = 1;
 
@@ -34,6 +39,7 @@
     return {
       id: DEFAULT_GROUP_ID,
       name: "Default",
+      loadOnStartup: false,
       pools: defaultPools(),
       shortcuts: defaultShortcuts(),
     };
@@ -46,6 +52,8 @@
       hideWarmTabs: true,
       muteWarmTabs: true,
       allowMultipleGroups: true,
+      handoffDirection: DEFAULT_HANDOFF_DIRECTION,
+      handoffCooldownMs: DEFAULT_HANDOFF_COOLDOWN_MS,
       activeGroupIds: [DEFAULT_GROUP_ID],
       poolGroups: [defaultPoolGroup()],
     };
@@ -81,6 +89,17 @@
       return DEFAULT_POOL_SIZE;
     }
     return value;
+  }
+
+  function clampHandoffCooldown(raw) {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) {
+      return DEFAULT_HANDOFF_COOLDOWN_MS;
+    }
+    return Math.min(
+      MAX_HANDOFF_COOLDOWN_MS,
+      Math.max(0, Math.round(value)),
+    );
   }
 
   function normalizePools(rawPools) {
@@ -259,6 +278,7 @@
     return {
       id,
       name,
+      loadOnStartup: source.loadOnStartup === true,
       pools: normalizePools(source.pools),
       shortcuts: normalizeShortcuts(source.shortcuts),
     };
@@ -270,8 +290,9 @@
     }
 
     const source = raw;
+    const sourceVersion = Number(source.version);
     if (
-      source.version !== CONFIG_VERSION
+      ![LEGACY_CONFIG_VERSION, CONFIG_VERSION].includes(sourceVersion)
       || !Array.isArray(source.poolGroups)
       || !Array.isArray(source.activeGroupIds)
     ) {
@@ -322,15 +343,46 @@
       activeGroupIds.splice(1);
     }
 
-    return {
+    const normalized = {
       version: CONFIG_VERSION,
       enabled: source.enabled !== false,
       hideWarmTabs: source.hideWarmTabs !== false,
       muteWarmTabs: source.muteWarmTabs !== false,
       allowMultipleGroups,
+      handoffDirection: source.handoffDirection === "left" ? "left" : DEFAULT_HANDOFF_DIRECTION,
+      handoffCooldownMs: clampHandoffCooldown(source.handoffCooldownMs),
       activeGroupIds,
       poolGroups: groups,
     };
+
+    // Version 1 allowed mutually incompatible startup groups to be stored.
+    // Migrate such configurations deterministically by keeping compatible
+    // startup groups in group order. Version 2 configurations are never
+    // silently repaired: attempts to create an invalid startup set are rejected.
+    if (sourceVersion === LEGACY_CONFIG_VERSION) {
+      const selected = [];
+      for (const group of normalized.poolGroups) {
+        if (!group.loadOnStartup) {
+          continue;
+        }
+        if (!normalized.allowMultipleGroups && selected.length > 0) {
+          group.loadOnStartup = false;
+          continue;
+        }
+        const candidateIds = [...selected, group.id];
+        const issue = activeConfigurationIssue({
+          ...normalized,
+          activeGroupIds: candidateIds,
+        });
+        if (issue) {
+          group.loadOnStartup = false;
+        } else {
+          selected.push(group.id);
+        }
+      }
+    }
+
+    return normalized;
   }
 
   function groupById(config, groupId) {
@@ -408,7 +460,7 @@
         return issue;
       }
     }
-    return activeConfigurationIssue(config);
+    return activeConfigurationIssue(config) ?? startupConfigurationIssue(config);
   }
 
   function activeConfigurationIssue(config) {
@@ -442,6 +494,74 @@
     }
 
     return null;
+  }
+
+  function startupGroupIds(config) {
+    return config.poolGroups
+      .filter((group) => group.loadOnStartup)
+      .map((group) => group.id);
+  }
+
+  function startupConfigurationIssue(config) {
+    const selectedIds = startupGroupIds(config);
+    if (!config.allowMultipleGroups && selectedIds.length > 1) {
+      return {
+        code: "startup-multiple-groups-disabled",
+        groupIds: selectedIds,
+        message: "Cannot load these groups on browser start while multiple-group mode is disabled.",
+      };
+    }
+
+    const issue = activeConfigurationIssue({
+      ...config,
+      activeGroupIds: selectedIds,
+    });
+    if (!issue) {
+      return null;
+    }
+    if (issue.code === "pool-limit") {
+      return {
+        ...issue,
+        code: "startup-pool-limit",
+        message: `Cannot load these groups on browser start: they contain ${issue.poolCount} pools in total, but only ${MAX_POOLS} shortcut slots are available.`,
+      };
+    }
+    if (issue.code === "shortcut-collision") {
+      return {
+        ...issue,
+        code: "startup-shortcut-collision",
+        message: `Cannot load these groups on browser start: shortcut “${issue.shortcut}” is assigned to both “${issue.first.group.name} / ${issue.first.pool.name}” and “${issue.second.group.name} / ${issue.second.pool.name}”.`,
+      };
+    }
+    return {
+      ...issue,
+      code: `startup-${issue.code ?? "configuration"}`,
+      message: `Cannot load these groups on browser start: ${issue.message}`,
+    };
+  }
+
+  function groupStartupIssue(config, groupId) {
+    const group = groupById(config, groupId);
+    if (!group) {
+      return {
+        code: "missing-group",
+        message: "That pool group no longer exists.",
+      };
+    }
+    const localIssue = groupShortcutIssue(group);
+    if (localIssue) {
+      return localIssue;
+    }
+
+    const selectedIds = config.allowMultipleGroups
+      ? [...new Set([...startupGroupIds(config), group.id])]
+      : [group.id];
+    const draft = structuredClone(config);
+    const selected = new Set(selectedIds);
+    for (const candidate of draft.poolGroups) {
+      candidate.loadOnStartup = selected.has(candidate.id);
+    }
+    return startupConfigurationIssue(draft);
   }
 
   function groupActivationIssue(config, groupId) {
@@ -514,6 +634,10 @@
     target.shortcuts = mergedShortcuts;
 
     if (destructive) {
+      const sourceWasStartup = source.loadOnStartup;
+      if (sourceWasStartup) {
+        target.loadOnStartup = true;
+      }
       draft.poolGroups = draft.poolGroups.filter((group) => group.id !== source.id);
 
       const sourceWasActive = draft.activeGroupIds.includes(source.id);
@@ -602,7 +726,14 @@
     const merged = buildMergedConfig(normalized, source.id, target.id, { destructive });
     const activeIssue = activeConfigurationIssue(merged);
     if (!activeIssue) {
-      return null;
+      const startupIssue = startupConfigurationIssue(merged);
+      if (!startupIssue) {
+        return null;
+      }
+      return {
+        code: "merge-startup-configuration",
+        message: `Cannot merge because the resulting startup selection would be invalid. ${startupIssue.message}`,
+      };
     }
     if (activeIssue.code === "pool-limit") {
       return {
@@ -687,9 +818,14 @@
     MIN_POOL_SIZE,
     MAX_POOL_SIZE,
     DEFAULT_POOL_SIZE,
+    DEFAULT_HANDOFF_DIRECTION,
+    DEFAULT_HANDOFF_COOLDOWN_MS,
+    MAX_HANDOFF_COOLDOWN_MS,
+    HANDOFF_COOLDOWN_SLIDER_MAX_MS,
     DEFAULT_GROUP_ID,
     CONFIG_KEY,
     CONFIG_VERSION,
+    LEGACY_CONFIG_VERSION,
     TAB_VALUE_KEY,
     TAB_VALUE_VERSION,
     defaultPool,
@@ -698,6 +834,7 @@
     defaultPoolGroup,
     defaultConfig,
     normalizeHttpUrl,
+    clampHandoffCooldown,
     formatShortcut,
     normalizePools,
     normalizeShortcuts,
@@ -708,6 +845,9 @@
     groupShortcutIssue,
     configurationIssue,
     activeConfigurationIssue,
+    startupGroupIds,
+    startupConfigurationIssue,
+    groupStartupIssue,
     groupActivationIssue,
     groupMergeIssue,
     mergeGroups,

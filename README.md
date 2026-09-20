@@ -8,7 +8,7 @@ A pool is a URL plus a desired number of preloaded copies. Pool groups store sep
 
 For every enabled pool in every active group, the extension tries to keep exactly `size` unused tabs available. A pooled tab is loaded in the background, tagged with Firefox session metadata, marked non-discardable, and optionally hidden and muted.
 
-When you take a tab, the extension prefers a completely loaded copy, removes its pool membership before activation, moves it to the focused window when needed, shows and activates it, restores normal discard/audio behavior, and immediately starts replacing it in the background. If the pool is empty, the configured URL opens normally as a cold fallback and the pool is rebuilt.
+When you take a tab, the extension prefers a completely loaded copy, removes its pool membership before activation, moves it to the focused window when needed, places it next to the current tab on the configured side, shows and activates it, restores normal discard/audio behavior, and immediately starts replacing it in the background. The default side is the right. If the pool is empty, the configured URL opens normally as a cold fallback at the same requested position and the pool is rebuilt.
 
 Hovering or keyboard-focusing a **Take** button also calls Firefox's `tabs.warmup()` for the best candidate when available.
 
@@ -41,20 +41,26 @@ The URL editor wraps and grows vertically so long links remain visible.
 The top **Settings** section contains:
 
 - **Allow multiple groups to be active simultaneously**;
-- **Hide pooled tabs from the tab strip**; and
-- **Mute pooled tabs until they are taken**.
+- **Hide pooled tabs from the tab strip**;
+- **Mute pooled tabs until they are taken**;
+- a left/right handoff-direction toggle (right by default); and
+- a tab-handoff cooldown control (150 ms by default).
+
+The handoff direction and cooldown controls are deliberately the final two settings. The direction control uses a rotating, CSS-drawn arrow whose center does not shift vertically when it changes direction. For ordinary unpinned tabs, a handed tab is inserted immediately to the selected side of the current tab. Firefox does not allow an unpinned tab to be inserted inside the pinned-tab region, so those cases are clamped to the nearest legal unpinned position.
+
+The cooldown slider covers 0–500 ms. The adjacent numeric field accepts 0–5000 ms and stays synchronized with the slider; values above 500 ms keep the slider at its rightmost position. A take request received during a positive cooldown is discarded immediately rather than queued for later execution. A value of 0 disables this software cooldown.
 
 All pool-group functionality is in one **Pool groups** section. The former separate **Active pools** section no longer exists.
 
-Click anywhere in a group header except its action buttons to expand it without entering edit mode. Expansion and collapse are animated. The expanded read-only view shows its pools.
+Click anywhere in a group header except its action buttons to expand it without entering edit mode. Expansion and collapse are animated. The collapsing content padding and editing divider are animated to zero together with the grid track to avoid the occasional final-frame snap that could appear at the end of the old collapse animation. The expanded read-only view shows its pools.
 
-Each group row provides **Rename**, **Clone**, **Delete**, **Edit/Edited**, and a visually separated **Load/Unload** action. Active and editing states are shown as badges. The entire group remains in its normal list position while expanded or edited.
+Each group row provides **Rename**, **Clone**, **Delete**, **Edit/Edited**, and a visually separated **Load/Unload** action. Active and editing states are shown as badges, and a small orange **Startup** badge is shown whenever the group is scheduled to load at browser start. The startup state can only be changed while the group is being edited or through the Startup graph. The entire group remains in its normal list position while expanded or edited.
 
-Clicking **Edit** puts that group into edit mode, highlights the row, and expands it. Any number of groups may be in edit mode simultaneously. Each edited group has its own **Done** button. Clicking **Done** validates and saves that group's current editor state and leaves the group expanded in read-only mode.
+Clicking **Edit** puts that group into edit mode, highlights the row, and expands it. Any number of groups may be in edit mode simultaneously. Each edited group has its own **Load on browser start** checkbox and **Done** button on the same toolbar line. The checkbox is off by default. An unchecked startup checkbox is disabled when adding that group to the current startup selection would exceed the 32-slot limit or collide with a selected startup shortcut. Startup compatibility is also revalidated whenever group pools or shortcuts change, during merges and drag/drop operations, and again before every save. Clicking **Done** validates and saves that group's current editor state and leaves the group expanded in read-only mode.
 
 Edited groups remain draggable, so group reordering works without leaving edit mode. Pool drag handles can also move pools between simultaneously edited groups.
 
-Creating a group with the bottom **+** button asks for its name and opens the new group in edit mode. Cloning a group asks for the clone's name, creates an inactive copy, and opens the clone in edit mode. Deleting an active group unloads it; no neighboring group is activated automatically. Zero active groups and zero stored groups are valid states.
+Creating a group with the bottom **+** button asks for its name and opens the new group in edit mode. Cloning a group asks for the clone's name, creates an inactive copy, and opens the clone in edit mode. A cloned group always starts with **Load on browser start** unchecked, even if the source group had it enabled. Deleting an active group unloads it; no neighboring group is activated automatically. Zero active groups and zero stored groups are valid states.
 
 ### Reactive saving
 
@@ -84,16 +90,13 @@ All create/rename/clone/delete/merge confirmations use in-page HTML dialogs rath
 
 ## Group graph
 
-The **Group graph** remains a top-level section alongside **Settings** and **Pool groups**. It visualizes activation compatibility:
+The **Group graph** remains a top-level section alongside **Settings** and **Pool groups** and now contains two graphs that reuse the same compatibility machinery.
 
-- loaded groups are highlighted;
-- a solid edge means the two endpoint groups can coexist while keeping the groups loaded now;
-- a thinner dotted edge means the pair can coexist with each other but not with the complete current loaded subset; and
-- no edge means the pair itself is incompatible because of the 32-pool limit or a shortcut collision.
+**Active grous** shows the runtime active set: loaded groups are highlighted with the normal active accent; a solid edge means the endpoint groups can coexist while keeping the groups loaded now; a thinner dotted edge means the pair can coexist with each other but not with the complete current loaded subset; and no edge means the pair itself is incompatible because of the 32-pool limit or a shortcut collision. Clicking a loaded node unloads it. Clicking an unloaded node uses the same activation path as **Load**.
 
-Clicking a loaded node unloads it. Clicking an unloaded node uses the same activation path as **Load** and reports the same compatibility error if the transition is invalid.
+**Startup graph** applies the same rules to the groups scheduled for browser startup. Scheduled nodes and their selected-to-selected edges are highlighted in orange. Clicking a scheduled node removes it from startup; clicking another compatible node schedules it. With multiple-group mode disabled, selecting a node replaces the previous startup selection just as loading a group replaces the active set.
 
-Nodes are draggable. Group names are shown up to 20 characters and can wrap across two centered lines; node size and label font scale with graph density to preserve spacing. Their custom graph positions are local options-page UI state. **Default arrangement** clears those positions and rebuilds the computed layout.
+Nodes in both graphs are draggable and share the same saved local layout positions. Group names are shown up to 20 characters and can wrap across two centered lines; node size and label font scale with graph density to preserve spacing. **Default arrangement** clears those positions and rebuilds both computed layouts.
 
 ## Popup
 
@@ -101,21 +104,25 @@ The popup has a global On/Off switch. Turning the extension off removes unused w
 
 Every stored group is listed with its name, pool/warm-tab counts, an incompatibility indicator when appropriate, and its own On/Off slider. With multi-group mode enabled, those sliders independently load and unload groups. With multi-group mode disabled, turning one group on replaces the active group.
 
-The popup's pool list is grouped by active group. Enabled pools show ready/loading state, the effective Firefox shortcut for their assigned command slot, and **Take**.
+The popup's pool list is grouped by active group. Enabled pools show ready/loading state, the effective Firefox shortcut for their assigned command slot, and **Take**. If **Take** is clicked during the configured cooldown, the request is ignored and the popup reports the remaining cooldown instead of closing or scheduling the take for later.
 
 The popup shows `N of 32 shortcut slots used · M tabs kept warm`, with the singular form `1 tab kept warm` when appropriate. Pool status is updated automatically; there is no manual refresh/reconciliation control.
 
 ## Saving and background synchronization
 
-Every committed transition is serialized by the background process. It validates the configuration, updates Firefox command slots, persists the data, and reconciles warm tabs. If persistence fails after a shortcut remap, the previous shortcut mapping is restored.
+Every committed transition is serialized by the background process. It validates the configuration, updates Firefox command slots, persists the data, and reconciles warm tabs. If persistence fails after a shortcut remap, the previous shortcut mapping is restored. Take requests use a separate immediate cooldown gate before entering that serialized queue, so blocked rapid repeats are not retained as delayed work.
 
 The obsolete background message used solely to reorder the former separate Active pools list has been removed. Active command order now derives from the single Pool groups ordering.
 
 ## Configuration format
 
-Extension version **1.1.0** uses configuration format version 1.
+Extension version **1.2.0** uses configuration format version **2**. Configuration files in version 1 remain importable and stored version-1 data is migrated automatically. Version-1 startup selections that contain mutually incompatible groups are migrated deterministically by retaining compatible marked groups in normal group order. Newly created version-2 configurations are never allowed to persist an incompatible startup selection.
 
-The stored configuration uses `activeGroupIds`, `allowMultipleGroups`, stable group/pool IDs, and a per-group shortcut array. `activeGroupIds` remains the runtime representation of the active set, but normalization derives its order from the unified `poolGroups` order. This removes the former second, independently draggable active-group ordering.
+The stored configuration uses `activeGroupIds`, `allowMultipleGroups`, `handoffDirection`, `handoffCooldownMs`, stable group/pool IDs, a per-group `loadOnStartup` flag, and a per-group shortcut array. `activeGroupIds` remains the runtime representation of the active set, but normalization derives its order from the unified `poolGroups` order.
+
+Importing a configuration now asks which imported groups should become active. Groups recorded as active by the imported file are checked by default; all others begin unchecked. The selection is validated against the imported multi-group setting, the 32-slot limit, and shortcut collisions before the configuration is committed. Exports always write configuration version 2.
+
+At browser startup, the active set is rebuilt from groups whose `loadOnStartup` flag is enabled. Version-2 saving enforces that the startup set is valid under the same pool-count and shortcut-collision rules as the active set. With multi-group mode disabled, only one group can be scheduled and selecting another replaces it. Groups without the flag are not retained merely because they happened to be active before the previous browser shutdown.
 
 Warm-tab session membership is version 1 and stores the owning `groupId`, `poolId`, and URL.
 
@@ -155,6 +162,8 @@ It uses:
 - `tabHide` to hide unused warm tabs from the tab strip.
 
 Normal tab-management APIs are used to create, show, activate, move, mute, reload, warm, and remove the extension's own pooled tabs.
+
+Firefox does not provide a reliable self-uninstall cleanup callback in which an extension can asynchronously close its pooled tabs after the user removes the add-on. The extension therefore does not claim uninstall-time tab cleanup; normal pool reconciliation still removes pooled tabs when groups are unloaded, disabled, deleted, or otherwise stop owning them while the extension is running.
 
 ## Development
 

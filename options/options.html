@@ -38,6 +38,29 @@
           <small>Prevents a background site from unexpectedly playing audio.</small>
         </span>
       </label>
+      <div class="setting-row handoff-direction-row">
+        <button id="handoffDirection" class="direction-toggle" type="button" aria-pressed="false" title="Place handed tabs to the right of the current tab">
+          <span class="direction-arrow" aria-hidden="true"></span>
+        </button>
+        <span>
+          <strong id="handoffDirectionLabel">Place handed tabs to the right of the current tab</strong>
+          <small>Choose which side of the current tab receives a tab taken from a pool.</small>
+        </span>
+      </div>
+      <div class="setting-row cooldown-row">
+        <span class="setting-spacer" aria-hidden="true"></span>
+        <span class="cooldown-copy">
+          <strong>Tab handoff cooldown</strong>
+          <small>Take requests received during the cooldown are ignored.</small>
+        </span>
+        <div class="cooldown-control">
+          <input id="handoffCooldownSlider" type="range" min="0" max="500" step="1" aria-label="Tab handoff cooldown from 0 to 500 milliseconds">
+          <label class="cooldown-number-wrap">
+            <input id="handoffCooldownMs" type="number" min="0" max="5000" step="1" inputmode="numeric" aria-label="Tab handoff cooldown in milliseconds">
+            <span>ms</span>
+          </label>
+        </div>
+      </div>
       <p class="note">Warm tabs stay non-discardable while pooled. Normal Firefox discarding is restored after a tab is taken.</p>
     </section>
 
@@ -65,11 +88,20 @@
       <div class="group-graph-title">
         <div>
           <h2 id="groupGraphHeading">Group graph</h2>
-          <p class="group-graph-hint">Currently loaded groups are highlighted. Solid edges can coexist with the groups loaded now. Dotted edges can coexist as a pair.</p>
+          <p class="group-graph-hint">Solid edges can coexist with the highlighted groups. Dotted edges can coexist as a pair.</p>
         </div>
         <button id="resetGroupGraph" type="button" title="Restore default arrangements of the group graph nodes">Default arrangement</button>
       </div>
-      <div id="groupGraph" class="group-graph" role="group" aria-label="Pool group compatibility graph"></div>
+      <div class="graph-block">
+        <h3>Active groups</h3>
+        <p class="group-graph-hint">Highlighted groups are currently loaded.</p>
+        <div id="groupGraph" class="group-graph active-graph" role="group" aria-label="Active pool group compatibility graph"></div>
+      </div>
+      <div class="graph-block">
+        <h3>Startup graph</h3>
+        <p class="group-graph-hint">Highlighted groups are scheduled to load on browser start.</p>
+        <div id="startupGroupGraph" class="group-graph startup-graph" role="group" aria-label="Startup pool group compatibility graph"></div>
+      </div>
       <p id="groupGraphEmpty" class="empty-state graph-empty" hidden>No groups to display.</p>
     </section>
   </main>
@@ -86,6 +118,7 @@
         <input id="appDialogCheckbox" type="checkbox">
         <span id="appDialogCheckboxLabel"></span>
       </label>
+      <div id="appDialogChecklist" class="dialog-checklist" hidden></div>
       <p id="appDialogInfo" class="dialog-info" hidden></p>
       <div class="dialog-actions">
         <button id="appDialogCancel" type="button">Cancel</button>

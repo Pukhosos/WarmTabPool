@@ -4,6 +4,11 @@ const OWNER = "warm-tab-pool";
 let operationQueue = Promise.resolve();
 let reconcileTimer = null;
 let configSyncTimer = null;
+let lifecycleSyncScheduled = false;
+let runtimeHandoffCooldownMs = WTP.DEFAULT_HANDOFF_COOLDOWN_MS;
+let handoffCooldownUntil = -Infinity;
+let positiveCooldownTakeInFlight = false;
+let runtimeTakeSettingsReady = null;
 const knownPoolTabIds = new Set();
 
 function serialized(task) {
@@ -34,12 +39,131 @@ function scheduleConfigSync(delayMs = 50) {
   }, delayMs);
 }
 
-async function getTargetWindowId() {
+function updateRuntimeTakeSettings(config) {
+  runtimeHandoffCooldownMs = WTP.clampHandoffCooldown(config.handoffCooldownMs);
+}
+
+async function requestTake(commandSlot) {
+  const invokedAt = performance.now();
+  await runtimeTakeSettingsReady;
+
+  if (runtimeHandoffCooldownMs > 0) {
+    const coolingDown = invokedAt < handoffCooldownUntil;
+    if (positiveCooldownTakeInFlight || coolingDown) {
+      const remainingMs = coolingDown
+        ? Math.max(1, Math.ceil(handoffCooldownUntil - invokedAt))
+        : runtimeHandoffCooldownMs;
+      return {
+        ignored: true,
+        reason: "cooldown",
+        cooldownMs: runtimeHandoffCooldownMs,
+        remainingMs,
+      };
+    }
+    // Do not let a rapid repeat wait in the serialized queue while the first
+    // handoff is still being prepared. It is discarded at invocation time.
+    positiveCooldownTakeInFlight = true;
+  }
+
+  try {
+    return await serialized(() => takeFromPool(commandSlot));
+  } finally {
+    positiveCooldownTakeInFlight = false;
+  }
+}
+
+function beginHandoffCooldown() {
+  handoffCooldownUntil = runtimeHandoffCooldownMs > 0
+    ? performance.now() + runtimeHandoffCooldownMs
+    : -Infinity;
+  // The handoff itself has happened, so the pre-handoff gate is no longer
+  // needed. Later requests are governed only by the configured deadline;
+  // requests after that deadline may wait behind normal background cleanup.
+  positiveCooldownTakeInFlight = false;
+}
+
+runtimeTakeSettingsReady = WTP.loadConfig()
+  .then((config) => updateRuntimeTakeSettings(config))
+  .catch((error) => {
+    console.warn("Could not preload tab handoff settings; using defaults:", error);
+  });
+
+async function getTargetActiveTab() {
   const activeTabs = await browser.tabs.query({
     active: true,
     lastFocusedWindow: true,
   });
-  return activeTabs[0]?.windowId;
+  return activeTabs[0] ?? null;
+}
+
+async function getTargetWindowId() {
+  return (await getTargetActiveTab())?.windowId;
+}
+
+async function handoffInsertionIndex(activeTab, candidateTab, direction) {
+  if (!activeTab || !Number.isInteger(activeTab.windowId)) {
+    return -1;
+  }
+
+  const tabs = (await browser.tabs.query({ windowId: activeTab.windowId }))
+    .filter((tab) => tab.id !== candidateTab?.id)
+    .sort((left, right) => left.index - right.index);
+  const activeIndex = tabs.findIndex((tab) => tab.id === activeTab.id);
+  if (activeIndex < 0) {
+    return -1;
+  }
+
+  const requestedIndex = direction === "left" ? activeIndex : activeIndex + 1;
+  const firstUnpinnedIndex = tabs.findIndex((tab) => !tab.pinned);
+  const legalStart = firstUnpinnedIndex < 0 ? tabs.length : firstUnpinnedIndex;
+
+  // Pooled tabs are intentionally unpinned. Firefox cannot place an unpinned
+  // tab inside the pinned region, so use the nearest legal position there.
+  return Math.max(requestedIndex, legalStart);
+}
+
+async function moveWarmTabForHandoff(tabId, candidateTab, activeTab, direction) {
+  if (!activeTab || !Number.isInteger(activeTab.windowId)) {
+    return;
+  }
+
+  const index = await handoffInsertionIndex(activeTab, candidateTab, direction);
+  const moveProperties = {
+    windowId: activeTab.windowId,
+    index,
+  };
+  try {
+    const moved = await browser.tabs.move(tabId, moveProperties);
+    if (Array.isArray(moved) && moved.length === 0) {
+      throw new Error("Firefox did not move the tab to the requested position");
+    }
+  } catch (error) {
+    console.warn(`Could not place warm tab ${tabId} next to the current tab:`, error);
+    if (candidateTab.windowId !== activeTab.windowId) {
+      try {
+        await browser.tabs.move(tabId, { windowId: activeTab.windowId, index: -1 });
+      } catch (fallbackError) {
+        console.warn(`Could not move warm tab ${tabId} to the focused window:`, fallbackError);
+      }
+    }
+  }
+}
+
+async function createColdHandoffTab(url, activeTab, direction) {
+  const properties = { url, active: true };
+  if (activeTab && Number.isInteger(activeTab.windowId)) {
+    properties.windowId = activeTab.windowId;
+    properties.index = await handoffInsertionIndex(activeTab, null, direction);
+  }
+  try {
+    return await browser.tabs.create(properties);
+  } catch (error) {
+    if (!Number.isInteger(properties.windowId)) {
+      throw error;
+    }
+    console.warn("Could not create the cold fallback next to the current tab:", error);
+    return browser.tabs.create({ url, active: true });
+  }
 }
 
 async function readMembership(tabId) {
@@ -319,6 +443,7 @@ function snapshotFrom(config, entries) {
 
 async function popupState() {
   const config = await WTP.loadConfig();
+  updateRuntimeTakeSettings(config);
   const entries = await taggedTabs();
   const activeIds = new Set(config.activeGroupIds);
   const statuses = snapshotFrom(config, entries);
@@ -392,6 +517,7 @@ async function warmBestCandidate(commandSlot) {
 
 async function takeFromPool(commandSlot) {
   const config = await WTP.loadConfig();
+  updateRuntimeTakeSettings(config);
   if (!config.enabled) {
     throw new Error("Warm Tab Pool is turned off");
   }
@@ -412,16 +538,13 @@ async function takeFromPool(commandSlot) {
     .sort(candidateOrder);
 
   const candidate = entries[0] ?? null;
-  const targetWindowId = await getTargetWindowId();
+  const targetTab = await getTargetActiveTab();
 
   if (!candidate) {
-    const properties = { url: pool.url, active: true };
-    if (Number.isInteger(targetWindowId)) {
-      properties.windowId = targetWindowId;
-    }
-    await browser.tabs.create(properties);
+    await createColdHandoffTab(pool.url, targetTab, config.handoffDirection);
+    beginHandoffCooldown();
     await replenishOnePool(assignment, config);
-    return { warm: false, reason: "empty" };
+    return { warm: false, reason: "empty", ignored: false };
   }
 
   const tabId = candidate.tab.id;
@@ -429,13 +552,12 @@ async function takeFromPool(commandSlot) {
   knownPoolTabIds.delete(tabId);
   await browser.sessions.removeTabValue(tabId, WTP.TAB_VALUE_KEY);
 
-  if (Number.isInteger(targetWindowId) && candidate.tab.windowId !== targetWindowId) {
-    try {
-      await browser.tabs.move(tabId, { windowId: targetWindowId, index: -1 });
-    } catch (error) {
-      console.warn(`Could not move warm tab ${tabId} to the focused window:`, error);
-    }
-  }
+  await moveWarmTabForHandoff(
+    tabId,
+    candidate.tab,
+    targetTab,
+    config.handoffDirection,
+  );
 
   try {
     await browser.tabs.show(tabId);
@@ -448,10 +570,12 @@ async function takeFromPool(commandSlot) {
     autoDiscardable: true,
     muted: false,
   });
+  beginHandoffCooldown();
   await replenishOnePool(assignment, config);
 
   return {
     warm,
+    ignored: false,
     reason: warm ? "ready" : candidate.tab.discarded ? "discarded" : "loading",
   };
 }
@@ -495,6 +619,7 @@ async function applyShortcuts(config) {
 
 async function syncSavedConfiguration() {
   const config = await WTP.loadConfig();
+  updateRuntimeTakeSettings(config);
   WTP.assertConfiguration(config);
   await applyShortcuts(config);
   await reconcilePools();
@@ -505,6 +630,7 @@ async function commitConfiguration(rawConfig, previousConfig = null) {
   const previous = previousConfig ?? await WTP.loadConfig();
   const next = WTP.normalizeConfig(rawConfig);
   WTP.assertConfiguration(next);
+  updateRuntimeTakeSettings(next);
 
   // Treat shortcut assignment + persisted configuration as one transition.
   // If persistence fails after Firefox accepted the new command mapping, put
@@ -540,6 +666,41 @@ async function transitionConfiguration(mutator) {
   const draft = structuredClone(config);
   await mutator(draft);
   return commitConfiguration(draft, config);
+}
+
+function startupGroupIds(config) {
+  const selected = [];
+  for (const group of config.poolGroups) {
+    if (!group.loadOnStartup) {
+      continue;
+    }
+
+    const candidateIds = config.allowMultipleGroups
+      ? [...selected, group.id]
+      : [group.id];
+    const issue = WTP.activeConfigurationIssue({
+      ...config,
+      activeGroupIds: candidateIds,
+    });
+    if (issue) {
+      console.warn(`Could not load “${group.name}” on browser start: ${issue.message}`);
+      continue;
+    }
+
+    if (!config.allowMultipleGroups) {
+      return candidateIds;
+    }
+    selected.push(group.id);
+  }
+  return selected;
+}
+
+async function syncStartupGroups() {
+  const previous = await WTP.loadConfig();
+  const next = structuredClone(previous);
+  next.activeGroupIds = startupGroupIds(next);
+  await commitConfiguration(next, previous);
+  return popupState();
 }
 
 async function syncActiveGroups() {
@@ -587,15 +748,17 @@ browser.commands.onCommand.addListener((command) => {
   if (!match) {
     return;
   }
-  void serialized(() => takeFromPool(Number(match[1])));
+  void requestTake(Number(match[1]));
 });
 
 browser.runtime.onInstalled.addListener(() => {
+  lifecycleSyncScheduled = true;
   void serialized(syncActiveGroups);
 });
 
 browser.runtime.onStartup.addListener(() => {
-  void serialized(syncActiveGroups);
+  lifecycleSyncScheduled = true;
+  void serialized(syncStartupGroups);
 });
 
 browser.storage.onChanged.addListener((changes, areaName) => {
@@ -656,7 +819,7 @@ browser.runtime.onMessage.addListener((message) => {
     return serialized(popupState);
   }
   if (message.type === "take") {
-    return serialized(() => takeFromPool(Number(message.slot)));
+    return requestTake(Number(message.slot));
   }
   if (message.type === "warm") {
     return serialized(() => warmBestCandidate(Number(message.slot)));
@@ -682,13 +845,20 @@ browser.runtime.onMessage.addListener((message) => {
   return undefined;
 });
 
-// Event pages can start for reasons other than startup/install. Reconcile even
-// if shortcut synchronization fails.
-void serialized(async () => {
-  try {
-    await syncActiveGroups();
-  } catch (error) {
-    console.error("Could not synchronize active pool shortcuts:", error);
-    await reconcilePools();
+// Event pages can start for reasons other than startup/install. Give Firefox
+// a short opportunity to dispatch the lifecycle event first; on browser start
+// that event must replace the previous runtime active set with load-on-startup
+// groups before warm-tab reconciliation runs.
+setTimeout(() => {
+  if (lifecycleSyncScheduled) {
+    return;
   }
-});
+  void serialized(async () => {
+    try {
+      await syncActiveGroups();
+    } catch (error) {
+      console.error("Could not synchronize active pool shortcuts:", error);
+      await reconcilePools();
+    }
+  });
+}, 75);
