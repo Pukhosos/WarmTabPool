@@ -299,7 +299,7 @@ function renderPools(state) {
 function render(state) {
   enabledInput.checked = state.enabled;
   enabledInput.disabled = interactionInFlight;
-  enabledLabel.textContent = state.enabled ? "On" : "Off";
+  enabledLabel.textContent = state.enabled ? "Extension enabled" : "Extension disabled";
   renderGroups(state);
   renderPools(state);
 }

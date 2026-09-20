@@ -17,6 +17,14 @@
 
     <section class="card globals">
       <h2>Settings</h2>
+      <label class="setting-row extension-power-row" title="Turn Warm Tab Pool on or off">
+        <input id="extensionEnabled" class="switch-input" type="checkbox">
+        <span class="switch" aria-hidden="true"></span>
+        <span class="extension-power-copy">
+          <strong id="extensionEnabledLabel">Warm Tab Pool is active</strong>
+          <small>Turning it off removes unused pooled tabs while keeping your groups and settings.</small>
+        </span>
+      </label>
       <label class="check-row">
         <input id="allowMultipleGroups" type="checkbox">
         <span>
@@ -38,17 +46,15 @@
           <small>Prevents a background site from unexpectedly playing audio.</small>
         </span>
       </label>
-      <div class="setting-row handoff-direction-row">
-        <button id="handoffDirection" class="direction-toggle" type="button" aria-pressed="false" title="Place handed tabs to the right of the current tab">
-          <span class="direction-arrow" aria-hidden="true"></span>
-        </button>
+      <label class="check-row">
+        <input id="reuseRestoredWarmTabs" type="checkbox">
         <span>
-          <strong id="handoffDirectionLabel">Place handed tabs to the right of the current tab</strong>
-          <small>Choose which side of the current tab receives a tab taken from a pool.</small>
+          <strong>Reuse restored pooled tabs after browser restart</strong>
+          <small>Adopt matching tabs restored by Firefox instead of creating replacements when possible.</small>
         </span>
-      </div>
-      <div class="setting-row cooldown-row">
-        <span class="setting-spacer" aria-hidden="true"></span>
+      </label>
+      <div id="handoffCooldownRow" class="setting-row cooldown-row">
+        <input id="handoffCooldownEnabled" class="cooldown-enabled" type="checkbox" aria-label="Enable tab handoff cooldown">
         <span class="cooldown-copy">
           <strong>Tab handoff cooldown</strong>
           <small>Take requests received during the cooldown are ignored.</small>
@@ -60,6 +66,19 @@
             <span>ms</span>
           </label>
         </div>
+      </div>
+      <div class="setting-row handoff-direction-row">
+        <button id="handoffDirection" class="direction-toggle" type="button" aria-pressed="false" title="Place handed tabs to the right of the current tab">
+          <span class="direction-arrow" aria-hidden="true">
+            <svg viewBox="0 0 20 20">
+              <path d="M3 10h12M11 6l4 4-4 4" />
+            </svg>
+          </span>
+        </button>
+        <span>
+          <strong id="handoffDirectionLabel">Place handed tabs to the right of the current tab</strong>
+          <small>Choose which side of the current tab receives a tab taken from a pool.</small>
+        </span>
       </div>
       <p class="note">Warm tabs stay non-discardable while pooled. Normal Firefox discarding is restored after a tab is taken.</p>
     </section>

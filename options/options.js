@@ -3,10 +3,15 @@
 const allowMultipleGroupsInput = document.querySelector("#allowMultipleGroups");
 const hideWarmTabsInput = document.querySelector("#hideWarmTabs");
 const muteWarmTabsInput = document.querySelector("#muteWarmTabs");
+const reuseRestoredWarmTabsInput = document.querySelector("#reuseRestoredWarmTabs");
+const handoffCooldownRow = document.querySelector("#handoffCooldownRow");
+const handoffCooldownEnabledInput = document.querySelector("#handoffCooldownEnabled");
 const handoffDirectionButton = document.querySelector("#handoffDirection");
 const handoffDirectionLabel = document.querySelector("#handoffDirectionLabel");
 const handoffCooldownSlider = document.querySelector("#handoffCooldownSlider");
 const handoffCooldownInput = document.querySelector("#handoffCooldownMs");
+const extensionEnabledInput = document.querySelector("#extensionEnabled");
+const extensionEnabledLabel = document.querySelector("#extensionEnabledLabel");
 const shortcutSettingsButton = document.querySelector("#shortcutSettings");
 const errorBanner = document.querySelector("#errorBanner");
 const groupListElement = document.querySelector("#groupList");
@@ -246,6 +251,20 @@ function setHandoffCooldownUi(value) {
   ));
 }
 
+function setHandoffCooldownEnabledUi(enabled) {
+  const normalized = Boolean(enabled);
+  handoffCooldownEnabledInput.checked = normalized;
+  handoffCooldownRow.classList.toggle("inactive", !normalized);
+}
+
+function setExtensionEnabledUi(enabled) {
+  const normalized = Boolean(enabled);
+  extensionEnabledInput.checked = normalized;
+  extensionEnabledLabel.textContent = normalized
+    ? "Warm Tab Pool is active"
+    : "Warm Tab Pool is inactive";
+}
+
 function renderGlobalSettings() {
   if (!currentConfig) {
     return;
@@ -253,8 +272,11 @@ function renderGlobalSettings() {
   allowMultipleGroupsInput.checked = currentConfig.allowMultipleGroups;
   hideWarmTabsInput.checked = currentConfig.hideWarmTabs;
   muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
+  reuseRestoredWarmTabsInput.checked = currentConfig.reuseRestoredWarmTabs;
+  setHandoffCooldownEnabledUi(currentConfig.handoffCooldownEnabled);
   setHandoffDirectionUi(currentConfig.handoffDirection);
   setHandoffCooldownUi(currentConfig.handoffCooldownMs);
+  setExtensionEnabledUi(currentConfig.enabled);
 }
 
 function clearInvalid(body) {
@@ -541,6 +563,9 @@ function syncGlobalSettingsIntoDraft() {
   currentConfig.allowMultipleGroups = allowMultipleGroupsInput.checked;
   currentConfig.hideWarmTabs = hideWarmTabsInput.checked;
   currentConfig.muteWarmTabs = muteWarmTabsInput.checked;
+  currentConfig.reuseRestoredWarmTabs = reuseRestoredWarmTabsInput.checked;
+  currentConfig.handoffCooldownEnabled = handoffCooldownEnabledInput.checked;
+  currentConfig.enabled = extensionEnabledInput.checked;
   currentConfig.handoffDirection = handoffDirectionButton.dataset.direction === "left"
     ? "left"
     : "right";
@@ -556,19 +581,6 @@ function syncGlobalSettingsIntoDraft() {
     currentConfig.activeGroupIds = currentConfig.activeGroupIds.length > 0
       ? [currentConfig.activeGroupIds[0]]
       : [];
-  }
-  if (!currentConfig.allowMultipleGroups) {
-    let keptStartupGroup = false;
-    for (const group of currentConfig.poolGroups) {
-      if (!group.loadOnStartup) {
-        continue;
-      }
-      if (keptStartupGroup) {
-        group.loadOnStartup = false;
-      } else {
-        keptStartupGroup = true;
-      }
-    }
   }
 }
 
@@ -594,6 +606,19 @@ function syncEditorsIntoDraft() {
     }
     group.pools = collectPools(body);
     group.shortcuts = WTP.normalizeShortcuts(collectShortcutArray(body));
+  }
+  if (!currentConfig.allowMultipleGroups) {
+    let keptStartupGroup = false;
+    for (const group of currentConfig.poolGroups) {
+      if (!group.loadOnStartup) {
+        continue;
+      }
+      if (keptStartupGroup) {
+        group.loadOnStartup = false;
+      } else {
+        keptStartupGroup = true;
+      }
+    }
   }
   currentConfig = WTP.normalizeConfig(currentConfig);
   return currentConfig;
@@ -1048,6 +1073,7 @@ function renderGroups() {
     startupBadge.title = "This group is scheduled to load when Firefox starts";
     nameWrap.append(startupBadge);
     const activeBadge = makeBadge("Active");
+    activeBadge.classList.add("active-badge");
     activeBadge.dataset.role = "active-badge";
     activeBadge.hidden = !isGroupActive(group.id);
     nameWrap.append(activeBadge);
@@ -2478,6 +2504,7 @@ function applyRemoteConfiguration(rawConfig, { preserveDraft = dirty } = {}) {
 
   const localGroupIds = new Set(currentConfig.poolGroups.map((group) => group.id));
   currentConfig.enabled = remote.enabled;
+  setExtensionEnabledUi(remote.enabled);
   currentConfig.activeGroupIds = remote.activeGroupIds.filter(
     (groupId) => localGroupIds.has(groupId),
   );
@@ -2701,26 +2728,90 @@ handoffCooldownInput.addEventListener("change", () => {
   void autosaveChanges();
 });
 
-for (const input of [hideWarmTabsInput, muteWarmTabsInput]) {
+for (const input of [
+  hideWarmTabsInput,
+  muteWarmTabsInput,
+  reuseRestoredWarmTabsInput,
+]) {
   input.addEventListener("change", () => {
     markDirty();
     void autosaveChanges();
   });
 }
 
+extensionEnabledInput.addEventListener("change", async () => {
+  if (!currentConfig) {
+    return;
+  }
+  const wanted = extensionEnabledInput.checked;
+  const previous = currentConfig.enabled;
+  setExtensionEnabledUi(wanted);
+  extensionEnabledInput.disabled = true;
+  try {
+    // Let any already-running reactive save finish first so an older full
+    // configuration cannot overwrite this dedicated global state change.
+    await autosaveQueue;
+    await browser.runtime.sendMessage({
+      type: "setEnabled",
+      enabled: wanted,
+    });
+    currentConfig.enabled = wanted;
+  } catch (error) {
+    currentConfig.enabled = previous;
+    setExtensionEnabledUi(previous);
+    showError(error.message);
+  } finally {
+    extensionEnabledInput.disabled = false;
+  }
+});
+
+handoffCooldownEnabledInput.addEventListener("change", () => {
+  setHandoffCooldownEnabledUi(handoffCooldownEnabledInput.checked);
+  markDirty();
+  void autosaveChanges();
+});
+
 allowMultipleGroupsInput.addEventListener("change", () => {
   if (!currentConfig) {
     return;
   }
+  const before = structuredClone(currentConfig);
   try {
+    const rememberedBeforeSingleMode = currentConfig.poolGroups
+      .filter((group) => group.loadOnStartup)
+      .map((group) => group.id);
+    const rememberedFromSingleMode = new Set([
+      ...currentConfig.multiGroupStartupIds,
+      ...rememberedBeforeSingleMode,
+    ]);
+
     syncEditorsIntoDraft();
-    if (!allowMultipleGroupsInput.checked && currentConfig.activeGroupIds.length > 1) {
+    if (!currentConfig.allowMultipleGroups && currentConfig.activeGroupIds.length > 1) {
       currentConfig.activeGroupIds = [currentConfig.activeGroupIds[0]];
     }
+
+    if (currentConfig.allowMultipleGroups) {
+      const survivingRememberedIds = currentConfig.poolGroups
+        .filter((group) => rememberedFromSingleMode.has(group.id))
+        .map((group) => group.id);
+      const restored = new Set(survivingRememberedIds);
+      for (const group of currentConfig.poolGroups) {
+        group.loadOnStartup = restored.has(group.id);
+      }
+      currentConfig.multiGroupStartupIds = survivingRememberedIds;
+    } else {
+      currentConfig.multiGroupStartupIds = rememberedBeforeSingleMode;
+    }
+
+    currentConfig = WTP.normalizeConfig(currentConfig);
+    assertDraftCompatibility(currentConfig);
     markDirty();
     renderAll();
     void autosaveChanges();
   } catch (error) {
+    currentConfig = before;
+    renderGlobalSettings();
+    renderAll();
     showError(error.message);
   }
 });

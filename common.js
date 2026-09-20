@@ -7,6 +7,8 @@
   const DEFAULT_POOL_SIZE = 1;
   const DEFAULT_HANDOFF_DIRECTION = "right";
   const DEFAULT_HANDOFF_COOLDOWN_MS = 150;
+  const DEFAULT_HANDOFF_COOLDOWN_ENABLED = true;
+  const DEFAULT_REUSE_RESTORED_WARM_TABS = true;
   const MAX_HANDOFF_COOLDOWN_MS = 5000;
   const HANDOFF_COOLDOWN_SLIDER_MAX_MS = 500;
   const DEFAULT_GROUP_ID = "default";
@@ -14,7 +16,8 @@
   const CONFIG_VERSION = 2;
   const LEGACY_CONFIG_VERSION = 1;
   const TAB_VALUE_KEY = "warm-tab-pool:membership";
-  const TAB_VALUE_VERSION = 1;
+  const TAB_VALUE_VERSION = 2;
+  const LEGACY_TAB_VALUE_VERSION = 1;
 
   function defaultPool(slot, id = `pool-${slot}`) {
     return {
@@ -52,8 +55,11 @@
       hideWarmTabs: true,
       muteWarmTabs: true,
       allowMultipleGroups: true,
+      reuseRestoredWarmTabs: DEFAULT_REUSE_RESTORED_WARM_TABS,
       handoffDirection: DEFAULT_HANDOFF_DIRECTION,
+      handoffCooldownEnabled: DEFAULT_HANDOFF_COOLDOWN_ENABLED,
       handoffCooldownMs: DEFAULT_HANDOFF_COOLDOWN_MS,
+      multiGroupStartupIds: [],
       activeGroupIds: [DEFAULT_GROUP_ID],
       poolGroups: [defaultPoolGroup()],
     };
@@ -343,14 +349,27 @@
       activeGroupIds.splice(1);
     }
 
+    const hasRememberedStartupIds = Array.isArray(source.multiGroupStartupIds);
+    const requestedRememberedStartupIds = new Set(
+      (hasRememberedStartupIds ? source.multiGroupStartupIds : [])
+        .map((rawId) => String(rawId ?? "").trim())
+        .filter((id) => id && validIds.has(id)),
+    );
+    const multiGroupStartupIds = groups
+      .filter((group) => requestedRememberedStartupIds.has(group.id))
+      .map((group) => group.id);
+
     const normalized = {
       version: CONFIG_VERSION,
       enabled: source.enabled !== false,
       hideWarmTabs: source.hideWarmTabs !== false,
       muteWarmTabs: source.muteWarmTabs !== false,
       allowMultipleGroups,
+      reuseRestoredWarmTabs: source.reuseRestoredWarmTabs !== false,
       handoffDirection: source.handoffDirection === "left" ? "left" : DEFAULT_HANDOFF_DIRECTION,
+      handoffCooldownEnabled: source.handoffCooldownEnabled !== false,
       handoffCooldownMs: clampHandoffCooldown(source.handoffCooldownMs),
+      multiGroupStartupIds,
       activeGroupIds,
       poolGroups: groups,
     };
@@ -380,6 +399,16 @@
           selected.push(group.id);
         }
       }
+    }
+
+    // Older configurations did not keep a separate snapshot of the startup
+    // selection used by multi-group mode. Seed that snapshot from the actual
+    // post-migration startup flags so temporarily switching to single-group
+    // mode can later restore the selection without inventing extra groups.
+    if (!hasRememberedStartupIds) {
+      normalized.multiGroupStartupIds = normalized.poolGroups
+        .filter((group) => group.loadOnStartup)
+        .map((group) => group.id);
     }
 
     return normalized;
@@ -820,6 +849,8 @@
     DEFAULT_POOL_SIZE,
     DEFAULT_HANDOFF_DIRECTION,
     DEFAULT_HANDOFF_COOLDOWN_MS,
+    DEFAULT_HANDOFF_COOLDOWN_ENABLED,
+    DEFAULT_REUSE_RESTORED_WARM_TABS,
     MAX_HANDOFF_COOLDOWN_MS,
     HANDOFF_COOLDOWN_SLIDER_MAX_MS,
     DEFAULT_GROUP_ID,
@@ -828,6 +859,7 @@
     LEGACY_CONFIG_VERSION,
     TAB_VALUE_KEY,
     TAB_VALUE_VERSION,
+    LEGACY_TAB_VALUE_VERSION,
     defaultPool,
     defaultPools,
     defaultShortcuts,

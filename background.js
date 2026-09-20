@@ -1,14 +1,20 @@
 "use strict";
 
 const OWNER = "warm-tab-pool";
+const BROWSER_SESSION_KEY = "warm-tab-pool:browser-session-id";
+const STARTUP_RESTORE_GRACE_MS = 1000;
+const STARTUP_RESTORE_WATCH_MS = 5000;
 let operationQueue = Promise.resolve();
 let reconcileTimer = null;
 let configSyncTimer = null;
 let lifecycleSyncScheduled = false;
+let startupRestoreGraceActive = false;
+let startupRestoreWatchUntil = 0;
 let runtimeHandoffCooldownMs = WTP.DEFAULT_HANDOFF_COOLDOWN_MS;
 let handoffCooldownUntil = -Infinity;
 let positiveCooldownTakeInFlight = false;
 let runtimeTakeSettingsReady = null;
+let browserSessionIdPromise = null;
 const knownPoolTabIds = new Set();
 
 function serialized(task) {
@@ -40,7 +46,41 @@ function scheduleConfigSync(delayMs = 50) {
 }
 
 function updateRuntimeTakeSettings(config) {
-  runtimeHandoffCooldownMs = WTP.clampHandoffCooldown(config.handoffCooldownMs);
+  runtimeHandoffCooldownMs = config.handoffCooldownEnabled
+    ? WTP.clampHandoffCooldown(config.handoffCooldownMs)
+    : 0;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function currentBrowserSessionId() {
+  if (browserSessionIdPromise) {
+    return browserSessionIdPromise;
+  }
+
+  browserSessionIdPromise = (async () => {
+    const sessionStorage = browser.storage?.session;
+    if (!sessionStorage) {
+      return `background-${crypto.randomUUID()}`;
+    }
+    try {
+      const stored = await sessionStorage.get(BROWSER_SESSION_KEY);
+      const existing = stored?.[BROWSER_SESSION_KEY];
+      if (typeof existing === "string" && existing) {
+        return existing;
+      }
+
+      const created = crypto.randomUUID();
+      await sessionStorage.set({ [BROWSER_SESSION_KEY]: created });
+      return created;
+    } catch (error) {
+      console.warn("Could not use browser-session storage for warm-tab restoration:", error);
+      return `background-${crypto.randomUUID()}`;
+    }
+  })();
+  return browserSessionIdPromise;
 }
 
 async function requestTake(commandSlot) {
@@ -174,12 +214,15 @@ async function readMembership(tabId) {
     }
 
     if (
-      value.version === WTP.TAB_VALUE_VERSION
+      [WTP.LEGACY_TAB_VALUE_VERSION, WTP.TAB_VALUE_VERSION].includes(value.version)
       && typeof value.groupId === "string"
       && typeof value.poolId === "string"
       && typeof value.url === "string"
     ) {
-      return value;
+      return {
+        ...value,
+        sessionId: typeof value.sessionId === "string" ? value.sessionId : "",
+      };
     }
   } catch {
     // The tab may have disappeared between query and lookup.
@@ -230,11 +273,14 @@ function candidateOrder(left, right) {
 
 function membershipMatches(membership, assignment) {
   return (
-    membership.version === WTP.TAB_VALUE_VERSION
-    && membership.groupId === assignment.group.id
+    membership.groupId === assignment.group.id
     && membership.poolId === assignment.pool.id
     && membership.url === assignment.pool.url
   );
+}
+
+function membershipIsFromPreviousBrowserSession(membership, browserSessionId) {
+  return membership.sessionId !== browserSessionId;
 }
 
 async function markAsNormalTab(tabId) {
@@ -256,6 +302,7 @@ async function markAsNormalTab(tabId) {
 
 async function createWarmTab(assignment, config, preferredWindowId = undefined) {
   const { group, pool } = assignment;
+  const browserSessionId = await currentBrowserSessionId();
   const createProperties = {
     url: pool.url,
     active: false,
@@ -278,6 +325,7 @@ async function createWarmTab(assignment, config, preferredWindowId = undefined) 
     poolId: pool.id,
     url: pool.url,
     createdAt: Date.now(),
+    sessionId: browserSessionId,
   });
   knownPoolTabIds.add(tab.id);
 
@@ -318,8 +366,8 @@ async function removeTabs(entries) {
   }
 }
 
-async function normalizeExistingWarmTab(entry, config) {
-  const { tab } = entry;
+async function normalizeExistingWarmTab(entry, config, browserSessionId) {
+  const { tab, membership } = entry;
   if (!Number.isInteger(tab.id)) {
     return "gone";
   }
@@ -341,6 +389,23 @@ async function normalizeExistingWarmTab(entry, config) {
       await browser.tabs.show(tab.id);
     }
 
+    if (
+      membership.version !== WTP.TAB_VALUE_VERSION
+      || membership.sessionId !== browserSessionId
+    ) {
+      await browser.sessions.setTabValue(tab.id, WTP.TAB_VALUE_KEY, {
+        owner: OWNER,
+        version: WTP.TAB_VALUE_VERSION,
+        groupId: membership.groupId,
+        poolId: membership.poolId,
+        url: membership.url,
+        createdAt: membership.createdAt ?? Date.now(),
+        sessionId: browserSessionId,
+      });
+      membership.version = WTP.TAB_VALUE_VERSION;
+      membership.sessionId = browserSessionId;
+    }
+
     if (tab.discarded) {
       await browser.tabs.reload(tab.id);
     }
@@ -354,15 +419,21 @@ async function normalizeExistingWarmTab(entry, config) {
 
 async function reconcilePools() {
   const config = await WTP.loadConfig();
+  const browserSessionId = await currentBrowserSessionId();
   let entries = await taggedTabs();
   const assignments = WTP.activePoolAssignments(config);
   const enabledAssignments = config.enabled
     ? assignments.filter(({ pool }) => pool.enabled && pool.url)
     : [];
 
-  const invalid = entries.filter(({ membership }) => (
-    !enabledAssignments.some((assignment) => membershipMatches(membership, assignment))
-  ));
+  const invalid = entries.filter(({ membership }) => {
+    const assignmentExists = enabledAssignments.some(
+      (assignment) => membershipMatches(membership, assignment),
+    );
+    const disallowedRestoredTab = !config.reuseRestoredWarmTabs
+      && membershipIsFromPreviousBrowserSession(membership, browserSessionId);
+    return !assignmentExists || disallowedRestoredTab;
+  });
   await removeTabs(invalid);
 
   if (!config.enabled) {
@@ -380,7 +451,7 @@ async function reconcilePools() {
 
     const normalized = [];
     for (const entry of candidates) {
-      const result = await normalizeExistingWarmTab(entry, config);
+      const result = await normalizeExistingWarmTab(entry, config, browserSessionId);
       if (result === "kept") {
         normalized.push(entry);
       }
@@ -404,6 +475,7 @@ async function reconcilePools() {
           poolId: pool.id,
           url: pool.url,
           createdAt: Date.now(),
+          sessionId: browserSessionId,
         },
       });
     }
@@ -626,7 +698,11 @@ async function syncSavedConfiguration() {
   return config;
 }
 
-async function commitConfiguration(rawConfig, previousConfig = null) {
+async function commitConfiguration(
+  rawConfig,
+  previousConfig = null,
+  { reconcile = true } = {},
+) {
   const previous = previousConfig ?? await WTP.loadConfig();
   const next = WTP.normalizeConfig(rawConfig);
   WTP.assertConfiguration(next);
@@ -649,14 +725,16 @@ async function commitConfiguration(rawConfig, previousConfig = null) {
     throw error;
   }
 
-  try {
-    await reconcilePools();
-  } catch (error) {
-    // The configuration and command mapping are already committed. Treat pool
-    // repair as a retryable side effect instead of reporting the transition as
-    // rolled back when it was not.
-    console.error("Configuration committed, but warm-tab reconciliation failed:", error);
-    scheduleReconcile(500);
+  if (reconcile) {
+    try {
+      await reconcilePools();
+    } catch (error) {
+      // The configuration and command mapping are already committed. Treat pool
+      // repair as a retryable side effect instead of reporting the transition as
+      // rolled back when it was not.
+      console.error("Configuration committed, but warm-tab reconciliation failed:", error);
+      scheduleReconcile(500);
+    }
   }
   return saved;
 }
@@ -699,7 +777,14 @@ async function syncStartupGroups() {
   const previous = await WTP.loadConfig();
   const next = structuredClone(previous);
   next.activeGroupIds = startupGroupIds(next);
-  await commitConfiguration(next, previous);
+  await commitConfiguration(next, previous, { reconcile: false });
+  if (next.reuseRestoredWarmTabs) {
+    // Firefox can restore tabs progressively. Give session restore a brief
+    // opportunity to recreate the previously pooled tabs before filling any
+    // missing slots, then adopt matching restored tabs during reconciliation.
+    await delay(STARTUP_RESTORE_GRACE_MS);
+  }
+  await reconcilePools();
   return popupState();
 }
 
@@ -758,7 +843,19 @@ browser.runtime.onInstalled.addListener(() => {
 
 browser.runtime.onStartup.addListener(() => {
   lifecycleSyncScheduled = true;
-  void serialized(syncStartupGroups);
+  startupRestoreGraceActive = true;
+  startupRestoreWatchUntil = Date.now() + STARTUP_RESTORE_WATCH_MS;
+  if (configSyncTimer !== null) {
+    clearTimeout(configSyncTimer);
+    configSyncTimer = null;
+  }
+  void serialized(async () => {
+    try {
+      return await syncStartupGroups();
+    } finally {
+      startupRestoreGraceActive = false;
+    }
+  });
 });
 
 browser.storage.onChanged.addListener((changes, areaName) => {
@@ -766,8 +863,30 @@ browser.storage.onChanged.addListener((changes, areaName) => {
     // A configuration write can originate from any extension page. Always run
     // the full state transition: validation,
     // Firefox command assignment, and warm-tab reconciliation.
-    scheduleConfigSync();
+    if (!startupRestoreGraceActive) {
+      scheduleConfigSync();
+    }
   }
+});
+
+browser.tabs.onCreated.addListener((tab) => {
+  if (!Number.isInteger(tab.id)) {
+    return;
+  }
+  if (Date.now() < startupRestoreWatchUntil) {
+    scheduleReconcile(250);
+    return;
+  }
+  // Outside startup, avoid reconciling for every ordinary new tab. Session
+  // metadata may be attached slightly after creation, so check after a short
+  // delay and only reconcile when this is one of our tagged tabs.
+  setTimeout(() => {
+    void readMembership(tab.id).then((membership) => {
+      if (membership) {
+        scheduleReconcile(50);
+      }
+    });
+  }, 150);
 });
 
 browser.tabs.onRemoved.addListener((tabId) => {

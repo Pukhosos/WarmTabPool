@@ -70,51 +70,82 @@ textarea.pool-url {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 14px;
-  height: 10px;
-  transform: translate(-50%, -50%) translateX(8px) rotate(0deg);
+  width: 18px;
+  height: 18px;
+  transform:
+    translate(-50%, -50%)
+    translateX(8px)
+    rotate(0deg);
   transform-origin: 50% 50%;
-  transition: transform .32s cubic-bezier(.2, .8, .2, 1);
+  transition:
+    transform .32s cubic-bezier(.2, .8, .2, 1);
 }
-.direction-arrow::before {
-  content: "";
-  position: absolute;
-  left: 1px;
-  right: 1px;
-  top: 50%;
-  border-top: 1.6px solid currentColor;
-  transform: translateY(-50%);
+.direction-arrow svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
-.direction-arrow::after {
-  content: "";
-  position: absolute;
-  right: 1px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  border-top: 1.6px solid currentColor;
-  border-right: 1.6px solid currentColor;
-  transform: translateY(-50%) rotate(45deg);
-  transform-origin: 50% 50%;
+.direction-arrow path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .direction-toggle[data-direction="left"] .direction-arrow {
   transform: translate(-50%, -50%) translateX(-8px) rotate(180deg);
+}
+.check-row input[type="checkbox"],
+.cooldown-enabled {
+  margin: 4px 0 0;
+  width: 16px;
+  height: 16px;
 }
 .cooldown-row {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
   grid-template-areas:
-    ". copy"
+    "toggle copy"
     ". control";
   align-items: start;
   column-gap: 10px;
   row-gap: 8px;
 }
 .cooldown-copy { grid-area: copy; display: flex; flex-direction: column; }
-.cooldown-control { grid-area: control; display: grid; grid-template-columns: minmax(170px, 1fr) auto; align-items: center; gap: 10px; margin-left: 18px; width: min(500px, calc(100% - 18px)); }
+.cooldown-control { grid-area: control; display: grid; grid-template-columns: minmax(170px, 1fr) auto; align-items: center; gap: 10px; margin-left: 0px; width: min(500px, 100%); }
 .cooldown-control input[type="range"] { width: 100%; min-width: 0; }
 .cooldown-number-wrap { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .cooldown-number-wrap input[type="number"] { width: 82px; }
+.cooldown-row.inactive .cooldown-copy,
+.cooldown-row.inactive .cooldown-control { opacity: .48; }
+.extension-power-row { display: flex; align-items: flex-start; gap: 10px; }
+.switch-input { position: absolute; opacity: 0; pointer-events: none; }
+.switch {
+  position: relative;
+  width: 34px;
+  height: 19px;
+  flex: 0 0 34px;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, CanvasText 22%, Canvas);
+  transition: background .12s ease;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: Canvas;
+  box-shadow: 0 0 0 1px color-mix(in srgb, CanvasText 20%, transparent);
+  transition: transform .12s ease;
+}
+.switch-input:checked + .switch { background: color-mix(in srgb, AccentColor 75%, CanvasText 25%); }
+.switch-input:checked + .switch::after { transform: translateX(15px); }
+.switch-input:focus-visible + .switch { outline: 2px solid currentColor; outline-offset: 2px; }
+.extension-power-copy { display: flex; flex-direction: column; }
 .note { margin: 14px 0 0 26px; font-size: 13px; }
 .section-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
 .section-title h2 { margin-bottom: 4px; }
@@ -180,6 +211,11 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .group-badge.startup-badge {
   border-color: color-mix(in srgb, var(--startup-accent) 72%, transparent);
   color: var(--startup-accent);
+  opacity: .92;
+}
+.group-badge.active-badge {
+  border-color: color-mix(in srgb, var(--active-accent) 72%, transparent);
+  color: var(--active-accent);
   opacity: .92;
 }
 .group-summary { font-size: 13px; }
@@ -489,12 +525,11 @@ tr.dragging { opacity: .45; }
   .section-title, .group-section-title, .group-graph-title { flex-direction: column; }
   .section-buttons { justify-content: flex-start; }
   .cooldown-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
-      "copy"
-      "control";
+      "toggle copy"
+      ". control";
   }
-  .cooldown-row .setting-spacer { display: none; }
   .cooldown-control { grid-template-columns: minmax(140px, 1fr) auto; margin-left: 18px; width: calc(100% - 18px); }
   .group-row-header { grid-template-columns: 30px 1fr; }
   .group-summary, .group-actions { grid-column: 2; }
