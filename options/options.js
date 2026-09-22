@@ -10,6 +10,10 @@ const handoffDirectionButton = document.querySelector("#handoffDirection");
 const handoffDirectionLabel = document.querySelector("#handoffDirectionLabel");
 const handoffCooldownSlider = document.querySelector("#handoffCooldownSlider");
 const handoffCooldownInput = document.querySelector("#handoffCooldownMs");
+const startupLoadDelayRow = document.querySelector("#startupLoadDelayRow");
+const startupLoadDelayEnabledInput = document.querySelector("#startupLoadDelayEnabled");
+const startupLoadDelaySlider = document.querySelector("#startupLoadDelaySlider");
+const startupLoadDelayInput = document.querySelector("#startupLoadDelaySeconds");
 const extensionEnabledInput = document.querySelector("#extensionEnabled");
 const extensionEnabledLabel = document.querySelector("#extensionEnabledLabel");
 const shortcutSettingsButton = document.querySelector("#shortcutSettings");
@@ -18,8 +22,9 @@ const groupListElement = document.querySelector("#groupList");
 const groupsEmpty = document.querySelector("#groupsEmpty");
 const createGroupButton = document.querySelector("#createGroup");
 const groupGraphElement = document.querySelector("#groupGraph");
-const startupGroupGraphElement = document.querySelector("#startupGroupGraph");
 const groupGraphEmpty = document.querySelector("#groupGraphEmpty");
+const groupGraphModeButton = document.querySelector("#groupGraphMode");
+const groupGraphModeHint = document.querySelector("#groupGraphModeHint");
 const resetGroupGraphButton = document.querySelector("#resetGroupGraph");
 const importConfigButton = document.querySelector("#importConfig");
 const exportConfigButton = document.querySelector("#exportConfig");
@@ -54,6 +59,7 @@ let draggedGroupRow = null;
 let draggedGroupOrder = "";
 let draftCompatibilityIssue = null;
 let compatibilityErrorText = "";
+let groupGraphMode = "active";
 
 const GRAPH_LAYOUT_KEY = "warm-tab-pool:group-graph-layout:v1";
 const GRAPH_WIDTH = 960;
@@ -202,6 +208,47 @@ async function requestConfirmation({ title, message, confirmLabel }) {
 }
 
 appDialogCancel.addEventListener("click", () => appDialog.close("cancel"));
+
+const sectionHelpControls = Array.from(document.querySelectorAll(".section-help-control"));
+
+function setSectionHelpOpen(control, open) {
+  control.classList.toggle("open", open);
+  control.querySelector(".section-help-button")?.setAttribute(
+    "aria-expanded",
+    String(open),
+  );
+}
+
+function closeSectionHelp(except = null) {
+  for (const control of sectionHelpControls) {
+    if (control !== except) {
+      setSectionHelpOpen(control, false);
+    }
+  }
+}
+
+for (const control of sectionHelpControls) {
+  const button = control.querySelector(".section-help-button");
+  button?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const nextOpen = !control.classList.contains("open");
+    closeSectionHelp(control);
+    setSectionHelpOpen(control, nextOpen);
+  });
+}
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".section-help-control")) {
+    closeSectionHelp();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeSectionHelp();
+  }
+});
+
 appDialogForm.addEventListener("submit", (event) => {
   if (appDialogConfirm.disabled) {
     event.preventDefault();
@@ -257,6 +304,26 @@ function setHandoffCooldownEnabledUi(enabled) {
   handoffCooldownRow.classList.toggle("inactive", !normalized);
 }
 
+function secondsText(milliseconds) {
+  const seconds = milliseconds / 1000;
+  return String(Number(seconds.toFixed(3)));
+}
+
+function setStartupLoadDelayUi(value) {
+  const normalized = WTP.clampStartupLoadDelay(value);
+  startupLoadDelayInput.value = secondsText(normalized);
+  startupLoadDelaySlider.value = secondsText(Math.min(
+    normalized,
+    WTP.STARTUP_LOAD_DELAY_SLIDER_MAX_MS,
+  ));
+}
+
+function setStartupLoadDelayEnabledUi(enabled) {
+  const normalized = Boolean(enabled);
+  startupLoadDelayEnabledInput.checked = normalized;
+  startupLoadDelayRow.classList.toggle("inactive", !normalized);
+}
+
 function setExtensionEnabledUi(enabled) {
   const normalized = Boolean(enabled);
   extensionEnabledInput.checked = normalized;
@@ -274,8 +341,10 @@ function renderGlobalSettings() {
   muteWarmTabsInput.checked = currentConfig.muteWarmTabs;
   reuseRestoredWarmTabsInput.checked = currentConfig.reuseRestoredWarmTabs;
   setHandoffCooldownEnabledUi(currentConfig.handoffCooldownEnabled);
+  setStartupLoadDelayEnabledUi(currentConfig.startupLoadDelayEnabled);
   setHandoffDirectionUi(currentConfig.handoffDirection);
   setHandoffCooldownUi(currentConfig.handoffCooldownMs);
+  setStartupLoadDelayUi(currentConfig.startupLoadDelayMs);
   setExtensionEnabledUi(currentConfig.enabled);
 }
 
@@ -565,6 +634,7 @@ function syncGlobalSettingsIntoDraft() {
   currentConfig.muteWarmTabs = muteWarmTabsInput.checked;
   currentConfig.reuseRestoredWarmTabs = reuseRestoredWarmTabsInput.checked;
   currentConfig.handoffCooldownEnabled = handoffCooldownEnabledInput.checked;
+  currentConfig.startupLoadDelayEnabled = startupLoadDelayEnabledInput.checked;
   currentConfig.enabled = extensionEnabledInput.checked;
   currentConfig.handoffDirection = handoffDirectionButton.dataset.direction === "left"
     ? "left"
@@ -576,6 +646,14 @@ function syncGlobalSettingsIntoDraft() {
       throw new Error(`Tab handoff cooldown must be an integer from 0 to ${WTP.MAX_HANDOFF_COOLDOWN_MS} ms.`);
     }
     currentConfig.handoffCooldownMs = cooldown;
+  }
+  const rawStartupDelay = startupLoadDelayInput.value.trim();
+  if (rawStartupDelay) {
+    const seconds = Number(rawStartupDelay);
+    if (!Number.isFinite(seconds) || seconds < 0 || seconds > WTP.MAX_STARTUP_LOAD_DELAY_MS / 1000) {
+      throw new Error(`Startup tab loading delay must be from 0 to ${WTP.MAX_STARTUP_LOAD_DELAY_MS / 1000} seconds.`);
+    }
+    currentConfig.startupLoadDelayMs = WTP.clampStartupLoadDelay(seconds * 1000);
   }
   if (!currentConfig.allowMultipleGroups && currentConfig.activeGroupIds.length > 1) {
     currentConfig.activeGroupIds = currentConfig.activeGroupIds.length > 0
@@ -929,14 +1007,14 @@ function renderExpandedBody(group, { open = true } = {}) {
     startupInput.type = "checkbox";
     startupInput.className = "group-startup-input";
     startupInput.checked = group.loadOnStartup;
-    startupInput.setAttribute("aria-label", `Load ${group.name} on browser start`);
+    startupInput.setAttribute("aria-label", `Load this group on browser start: ${group.name}`);
     startupInput.addEventListener("input", (event) => event.stopPropagation());
     startupInput.addEventListener("change", (event) => {
       event.stopPropagation();
       void changeGroupStartup(group.id, startupInput.checked);
     });
     const startupText = document.createElement("span");
-    startupText.textContent = "Load on browser start";
+    startupText.textContent = "Load this group on browser start";
     startupLabel.append(startupInput, startupText);
 
     const done = document.createElement("button");
@@ -1633,7 +1711,11 @@ function graphPointerPosition(svg, event) {
 function renderCompatibilityGraph(element, config, { mode, selectedGroupIds }) {
   element.replaceChildren();
   const edges = graphRelations(config, selectedGroupIds);
-  const defaults = defaultGraphPositions(config.poolGroups, edges);
+  // The layout is based only on pairwise compatibility, never on which mode
+  // is currently displayed. Switching Active/Startup therefore cannot move
+  // nodes unless the user explicitly drags them or resets the arrangement.
+  const layoutEdges = graphRelations(config, []);
+  const defaults = defaultGraphPositions(config.poolGroups, layoutEdges);
   const stored = graphStoredPositions();
   const radius = graphNodeRadius(config.poolGroups.length);
   const positions = new Map();
@@ -1864,27 +1946,36 @@ function renderCompatibilityGraph(element, config, { mode, selectedGroupIds }) {
 
 function renderGroupGraph() {
   groupGraphElement.replaceChildren();
-  startupGroupGraphElement.replaceChildren();
   const config = configForGraph();
+  const startupMode = groupGraphMode === "startup";
+
+  groupGraphModeButton.textContent = startupMode ? "Startup groups" : "Active groups";
+  groupGraphModeButton.classList.toggle("startup-mode", startupMode);
+  groupGraphModeButton.setAttribute("aria-pressed", String(startupMode));
+  groupGraphModeButton.title = startupMode
+    ? "Showing startup groups; click to show active groups"
+    : "Showing active groups; click to show startup groups";
+  groupGraphModeHint.textContent = startupMode
+    ? "Highlighted groups are scheduled to load on browser start. Click a node to schedule/unschedule it."
+    : "Highlighted groups are currently loaded. Click a node to load/unload it.";
+  groupGraphElement.classList.toggle("startup-mode", startupMode);
+  groupGraphElement.classList.toggle("active-graph", !startupMode);
+
   if (!config || config.poolGroups.length === 0) {
     groupGraphElement.hidden = true;
-    startupGroupGraphElement.hidden = true;
     groupGraphEmpty.hidden = false;
     resetGroupGraphButton.disabled = true;
+    groupGraphModeButton.disabled = true;
     return;
   }
 
   groupGraphElement.hidden = false;
-  startupGroupGraphElement.hidden = false;
   groupGraphEmpty.hidden = true;
   resetGroupGraphButton.disabled = false;
+  groupGraphModeButton.disabled = false;
   renderCompatibilityGraph(groupGraphElement, config, {
-    mode: "active",
-    selectedGroupIds: config.activeGroupIds,
-  });
-  renderCompatibilityGraph(startupGroupGraphElement, config, {
-    mode: "startup",
-    selectedGroupIds: WTP.startupGroupIds(config),
+    mode: startupMode ? "startup" : "active",
+    selectedGroupIds: startupMode ? WTP.startupGroupIds(config) : config.activeGroupIds,
   });
 }
 
@@ -2568,6 +2659,11 @@ shortcutSettingsButton.addEventListener("click", async () => {
 
 createGroupButton.addEventListener("click", () => void createGroup());
 
+groupGraphModeButton.addEventListener("click", () => {
+  groupGraphMode = groupGraphMode === "active" ? "startup" : "active";
+  renderGroupGraph();
+});
+
 resetGroupGraphButton.addEventListener("click", () => {
   clearStoredGraphPositions();
   renderGroupGraph();
@@ -2728,6 +2824,41 @@ handoffCooldownInput.addEventListener("change", () => {
   void autosaveChanges();
 });
 
+startupLoadDelaySlider.addEventListener("input", () => {
+  startupLoadDelayInput.value = startupLoadDelaySlider.value;
+  markDirty();
+});
+
+startupLoadDelaySlider.addEventListener("change", () => {
+  startupLoadDelayInput.value = startupLoadDelaySlider.value;
+  markDirty();
+  void autosaveChanges();
+});
+
+startupLoadDelayInput.addEventListener("input", () => {
+  const seconds = Number(startupLoadDelayInput.value);
+  if (startupLoadDelayInput.value.trim() && Number.isFinite(seconds)) {
+    startupLoadDelaySlider.value = String(Math.min(
+      Math.max(0, seconds),
+      WTP.STARTUP_LOAD_DELAY_SLIDER_MAX_MS / 1000,
+    ));
+  }
+  markDirty();
+});
+
+startupLoadDelayInput.addEventListener("change", () => {
+  if (!currentConfig) {
+    return;
+  }
+  const raw = startupLoadDelayInput.value.trim();
+  const fallback = currentConfig.startupLoadDelayMs;
+  const milliseconds = raw ? Number(raw) * 1000 : fallback;
+  const normalized = WTP.clampStartupLoadDelay(milliseconds);
+  setStartupLoadDelayUi(normalized);
+  markDirty();
+  void autosaveChanges();
+});
+
 for (const input of [
   hideWarmTabsInput,
   muteWarmTabsInput,
@@ -2767,6 +2898,12 @@ extensionEnabledInput.addEventListener("change", async () => {
 
 handoffCooldownEnabledInput.addEventListener("change", () => {
   setHandoffCooldownEnabledUi(handoffCooldownEnabledInput.checked);
+  markDirty();
+  void autosaveChanges();
+});
+
+startupLoadDelayEnabledInput.addEventListener("change", () => {
+  setStartupLoadDelayEnabledUi(startupLoadDelayEnabledInput.checked);
   markDirty();
   void autosaveChanges();
 });

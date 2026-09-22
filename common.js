@@ -8,9 +8,13 @@
   const DEFAULT_HANDOFF_DIRECTION = "right";
   const DEFAULT_HANDOFF_COOLDOWN_MS = 150;
   const DEFAULT_HANDOFF_COOLDOWN_ENABLED = true;
+  const DEFAULT_STARTUP_LOAD_DELAY_MS = 500;
+  const DEFAULT_STARTUP_LOAD_DELAY_ENABLED = true;
   const DEFAULT_REUSE_RESTORED_WARM_TABS = true;
   const MAX_HANDOFF_COOLDOWN_MS = 5000;
   const HANDOFF_COOLDOWN_SLIDER_MAX_MS = 500;
+  const MAX_STARTUP_LOAD_DELAY_MS = 60000;
+  const STARTUP_LOAD_DELAY_SLIDER_MAX_MS = 10000;
   const DEFAULT_GROUP_ID = "default";
   const CONFIG_KEY = "config";
   const CONFIG_VERSION = 2;
@@ -59,6 +63,8 @@
       handoffDirection: DEFAULT_HANDOFF_DIRECTION,
       handoffCooldownEnabled: DEFAULT_HANDOFF_COOLDOWN_ENABLED,
       handoffCooldownMs: DEFAULT_HANDOFF_COOLDOWN_MS,
+      startupLoadDelayEnabled: DEFAULT_STARTUP_LOAD_DELAY_ENABLED,
+      startupLoadDelayMs: DEFAULT_STARTUP_LOAD_DELAY_MS,
       multiGroupStartupIds: [],
       activeGroupIds: [DEFAULT_GROUP_ID],
       poolGroups: [defaultPoolGroup()],
@@ -104,6 +110,17 @@
     }
     return Math.min(
       MAX_HANDOFF_COOLDOWN_MS,
+      Math.max(0, Math.round(value)),
+    );
+  }
+
+  function clampStartupLoadDelay(raw) {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) {
+      return DEFAULT_STARTUP_LOAD_DELAY_MS;
+    }
+    return Math.min(
+      MAX_STARTUP_LOAD_DELAY_MS,
       Math.max(0, Math.round(value)),
     );
   }
@@ -369,6 +386,8 @@
       handoffDirection: source.handoffDirection === "left" ? "left" : DEFAULT_HANDOFF_DIRECTION,
       handoffCooldownEnabled: source.handoffCooldownEnabled !== false,
       handoffCooldownMs: clampHandoffCooldown(source.handoffCooldownMs),
+      startupLoadDelayEnabled: source.startupLoadDelayEnabled !== false,
+      startupLoadDelayMs: clampStartupLoadDelay(source.startupLoadDelayMs),
       multiGroupStartupIds,
       activeGroupIds,
       poolGroups: groups,
@@ -850,9 +869,13 @@
     DEFAULT_HANDOFF_DIRECTION,
     DEFAULT_HANDOFF_COOLDOWN_MS,
     DEFAULT_HANDOFF_COOLDOWN_ENABLED,
+    DEFAULT_STARTUP_LOAD_DELAY_MS,
+    DEFAULT_STARTUP_LOAD_DELAY_ENABLED,
     DEFAULT_REUSE_RESTORED_WARM_TABS,
     MAX_HANDOFF_COOLDOWN_MS,
     HANDOFF_COOLDOWN_SLIDER_MAX_MS,
+    MAX_STARTUP_LOAD_DELAY_MS,
+    STARTUP_LOAD_DELAY_SLIDER_MAX_MS,
     DEFAULT_GROUP_ID,
     CONFIG_KEY,
     CONFIG_VERSION,
@@ -867,6 +890,7 @@
     defaultConfig,
     normalizeHttpUrl,
     clampHandoffCooldown,
+    clampStartupLoadDelay,
     formatShortcut,
     normalizePools,
     normalizeShortcuts,

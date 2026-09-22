@@ -16,7 +16,15 @@
     </header>
 
     <section class="card globals">
-      <h2>Settings</h2>
+      <div class="section-heading-line">
+        <h2>Settings</h2>
+        <div class="section-help-control">
+          <button class="section-help-button" type="button" aria-label="About Settings" aria-expanded="false">?</button>
+          <div class="section-help-popover" role="tooltip">
+            Extension-wide behavior for every pool group.
+          </div>
+        </div>
+      </div>
       <label class="setting-row extension-power-row" title="Turn Warm Tab Pool on or off">
         <input id="extensionEnabled" class="switch-input" type="checkbox">
         <span class="switch" aria-hidden="true"></span>
@@ -50,7 +58,7 @@
         <input id="reuseRestoredWarmTabs" type="checkbox">
         <span>
           <strong>Reuse restored pooled tabs after browser restart</strong>
-          <small>Adopt matching tabs restored by Firefox instead of creating replacements when possible.</small>
+          <small>Reuse matching pooled tabs from Firefox session restore.</small>
         </span>
       </label>
       <div id="handoffCooldownRow" class="setting-row cooldown-row">
@@ -64,6 +72,20 @@
           <label class="cooldown-number-wrap">
             <input id="handoffCooldownMs" type="number" min="0" max="5000" step="1" inputmode="numeric" aria-label="Tab handoff cooldown in milliseconds">
             <span>ms</span>
+          </label>
+        </div>
+      </div>
+      <div id="startupLoadDelayRow" class="setting-row cooldown-row">
+        <input id="startupLoadDelayEnabled" class="cooldown-enabled" type="checkbox" aria-label="Enable startup tab loading delay">
+        <span class="cooldown-copy">
+          <strong>Startup tab loading delay</strong>
+          <small>How long to wait between extension-initiated tab loads at browser startup.</small>
+        </span>
+        <div class="cooldown-control">
+          <input id="startupLoadDelaySlider" type="range" min="0" max="10" step="0.1" aria-label="Startup tab loading delay from 0 to 10 seconds">
+          <label class="cooldown-number-wrap">
+            <input id="startupLoadDelaySeconds" type="number" min="0" max="60" step="0.1" inputmode="decimal" aria-label="Startup tab loading delay in seconds">
+            <span>s</span>
           </label>
         </div>
       </div>
@@ -86,7 +108,15 @@
     <section class="card" id="poolGroupsCard">
       <div class="section-title group-section-title">
         <div>
-          <h2>Pool groups</h2>
+          <div class="section-heading-line">
+            <h2>Pool groups</h2>
+            <div class="section-help-control">
+              <button class="section-help-button" type="button" aria-label="About Pool groups" aria-expanded="false">?</button>
+              <div class="section-help-popover" role="tooltip">
+                Create and organize named groups of warm-tab pools.
+              </div>
+            </div>
+          </div>
           <p class="hint">Type shortcuts as text, for example <code>Ctrl+Shift+1</code> or <code>F13</code>. Leave blank for no shortcut.</p>
         </div>
         <div class="section-buttons">
@@ -106,21 +136,24 @@
     <section class="card" id="groupGraphCard" aria-labelledby="groupGraphHeading">
       <div class="group-graph-title">
         <div>
-          <h2 id="groupGraphHeading">Group graph</h2>
+          <div class="section-heading-line">
+            <h2 id="groupGraphHeading">Group graph</h2>
+            <div class="section-help-control">
+              <button class="section-help-button" type="button" aria-label="About Group graph" aria-expanded="false">?</button>
+              <div class="section-help-popover" role="tooltip">
+                Visualizes which pool groups can coexist. Use the mode toggle to inspect either the currently active groups or the groups scheduled for browser start. Click a node to change load/schedule state of the corresponding group.
+              </div>
+            </div>
+          </div>
           <p class="group-graph-hint">Solid edges can coexist with the highlighted groups. Dotted edges can coexist as a pair.</p>
         </div>
-        <button id="resetGroupGraph" type="button" title="Restore default arrangements of the group graph nodes">Default arrangement</button>
+        <div class="section-buttons graph-section-buttons">
+          <button id="groupGraphMode" class="graph-mode-toggle" type="button" aria-pressed="false" title="Showing active groups; click to show startup groups">Active groups</button>
+          <button id="resetGroupGraph" type="button" title="Restore default arrangement of the group graph nodes">Default arrangement</button>
+        </div>
       </div>
-      <div class="graph-block">
-        <h3>Active groups</h3>
-        <p class="group-graph-hint">Highlighted groups are currently loaded.</p>
-        <div id="groupGraph" class="group-graph active-graph" role="group" aria-label="Active pool group compatibility graph"></div>
-      </div>
-      <div class="graph-block">
-        <h3>Startup graph</h3>
-        <p class="group-graph-hint">Highlighted groups are scheduled to load on browser start.</p>
-        <div id="startupGroupGraph" class="group-graph startup-graph" role="group" aria-label="Startup pool group compatibility graph"></div>
-      </div>
+      <p id="groupGraphModeHint" class="group-graph-mode-hint">Highlighted groups are currently loaded. Click a node to load/unload it.</p>
+      <div id="groupGraph" class="group-graph active-graph" role="group" aria-label="Active pool group compatibility graph"></div>
       <p id="groupGraphEmpty" class="empty-state graph-empty" hidden>No groups to display.</p>
     </section>
   </main>

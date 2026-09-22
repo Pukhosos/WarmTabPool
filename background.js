@@ -55,6 +55,20 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function createLoadPacer(delayMs) {
+  const normalizedDelayMs = WTP.clampStartupLoadDelay(delayMs);
+  let lastLoadStartedAt = -Infinity;
+
+  return async () => {
+    const now = performance.now();
+    const waitMs = Math.ceil(lastLoadStartedAt + normalizedDelayMs - now);
+    if (Number.isFinite(lastLoadStartedAt) && waitMs > 0) {
+      await delay(waitMs);
+    }
+    lastLoadStartedAt = performance.now();
+  };
+}
+
 function currentBrowserSessionId() {
   if (browserSessionIdPromise) {
     return browserSessionIdPromise;
@@ -366,7 +380,12 @@ async function removeTabs(entries) {
   }
 }
 
-async function normalizeExistingWarmTab(entry, config, browserSessionId) {
+async function normalizeExistingWarmTab(
+  entry,
+  config,
+  browserSessionId,
+  beforeNetworkLoad = null,
+) {
   const { tab, membership } = entry;
   if (!Number.isInteger(tab.id)) {
     return "gone";
@@ -407,6 +426,7 @@ async function normalizeExistingWarmTab(entry, config, browserSessionId) {
     }
 
     if (tab.discarded) {
+      await beforeNetworkLoad?.();
       await browser.tabs.reload(tab.id);
     }
   } catch (error) {
@@ -417,8 +437,11 @@ async function normalizeExistingWarmTab(entry, config, browserSessionId) {
   return "kept";
 }
 
-async function reconcilePools() {
+async function reconcilePools({ startupLoadDelayMs = 0 } = {}) {
   const config = await WTP.loadConfig();
+  const beforeNetworkLoad = startupLoadDelayMs > 0
+    ? createLoadPacer(startupLoadDelayMs)
+    : null;
   const browserSessionId = await currentBrowserSessionId();
   let entries = await taggedTabs();
   const assignments = WTP.activePoolAssignments(config);
@@ -449,22 +472,30 @@ async function reconcilePools() {
       .filter(({ membership }) => membershipMatches(membership, assignment))
       .sort(candidateOrder);
 
-    const normalized = [];
-    for (const entry of candidates) {
-      const result = await normalizeExistingWarmTab(entry, config, browserSessionId);
-      if (result === "kept") {
-        normalized.push(entry);
-      }
-    }
-    candidates = normalized.sort(candidateOrder);
-
+    // Drop excess restored copies before normalization. In particular, do not
+    // reload discarded tabs that are going to be removed anyway.
     if (candidates.length > pool.size) {
       const extras = candidates.slice(pool.size);
       await removeTabs(extras);
       candidates = candidates.slice(0, pool.size);
     }
 
+    const normalized = [];
+    for (const entry of candidates) {
+      const result = await normalizeExistingWarmTab(
+        entry,
+        config,
+        browserSessionId,
+        beforeNetworkLoad,
+      );
+      if (result === "kept") {
+        normalized.push(entry);
+      }
+    }
+    candidates = normalized.sort(candidateOrder);
+
     while (candidates.length < pool.size) {
+      await beforeNetworkLoad?.();
       const tab = await createWarmTab(assignment, config, preferredWindowId);
       candidates.push({
         tab,
@@ -784,7 +815,10 @@ async function syncStartupGroups() {
     // missing slots, then adopt matching restored tabs during reconciliation.
     await delay(STARTUP_RESTORE_GRACE_MS);
   }
-  await reconcilePools();
+  const startupLoadDelayMs = next.startupLoadDelayEnabled
+    ? WTP.clampStartupLoadDelay(next.startupLoadDelayMs)
+    : 0;
+  await reconcilePools({ startupLoadDelayMs });
   return popupState();
 }
 
